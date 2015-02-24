@@ -1,0 +1,11 @@
+{
+  "port": "4000",
+  "scrape_interval": "10s",
+  "endpoints": [
+    {
+      "name": "mesos-slave.example.com",
+      "target": "http://mesos-slave.example.com:5051",
+      "scrape_interval": "60s"
+    }
+  ]
+}
