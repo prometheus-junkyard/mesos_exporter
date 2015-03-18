@@ -1,5 +1,8 @@
-FROM golang:1.4.1-onbuild
+FROM golang:onbuild
+MAINTAINER Prometheus Team <prometheus-developers@googlegroups.com>
 
 ADD config.json /config.json
 
-CMD ["go-wrapper", "run", "-config.file=/config.json" ]
+ENTRYPOINT ["go-wrapper", "run" ]
+CMD        [ "-config.file=/config.json" ]
+EXPOSE     9105

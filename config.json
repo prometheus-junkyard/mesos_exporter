@@ -1,5 +1,5 @@
 {
-  "port": "4000",
+  "port": "9105",
   "scrape_interval": "10s",
   "endpoints": [
     {

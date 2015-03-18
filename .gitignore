@@ -1,1 +1,4 @@
-bin
+.build
+mesos_exporter
+*.tar.gz
+*-stamp
