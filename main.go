@@ -17,6 +17,9 @@ import (
 var (
 	configFile  = flag.String("config.file", "", "Path to config file.")
 	metricsPath = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+)
+
+var (
 	cpuLimitVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
