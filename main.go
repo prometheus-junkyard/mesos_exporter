@@ -23,42 +23,42 @@ var (
 	cpuLimitVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
-			Name:      "cpus_limit",
-			Help:      "CPU share limit.",
+			Name:      "cpu_limit",
+			Help:      "Fractional CPU limit.",
 		},
-		[]string{"service", "mesos_slave", "framework_id"},
+		[]string{"task", "mesos_slave", "framework_id"},
 	)
 	cpuSysVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
-			Name:      "cpus_system_time_secs",
-			Help:      "CPU system time for task.",
+			Name:      "cpu_system_seconds_total",
+			Help:      "Cumulative system CPU time in seconds.",
 		},
-		[]string{"service", "mesos_slave", "framework_id"},
+		[]string{"task", "mesos_slave", "framework_id"},
 	)
 	cpuUsrVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
-			Name:      "cpus_user_time_secs",
-			Help:      "CPU system time for task.",
+			Name:      "cpu_user_seconds_total",
+			Help:      "Cumulative user CPU time in seconds.",
 		},
-		[]string{"service", "mesos_slave", "framework_id"},
+		[]string{"task", "mesos_slave", "framework_id"},
 	)
 	memLimitVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
-			Name:      "mem_limit_bytes",
+			Name:      "memory_limit_bytes",
 			Help:      "Task memory limit in bytes.",
 		},
-		[]string{"service", "mesos_slave", "framework_id"},
+		[]string{"task", "mesos_slave", "framework_id"},
 	)
 	memRssVal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mesos_task",
-			Name:      "mem_rss_bytes",
+			Name:      "memory_rss_bytes",
 			Help:      "Task memory RSS usage in bytes.",
 		},
-		[]string{"service", "mesos_slave", "framework_id"},
+		[]string{"task", "mesos_slave", "framework_id"},
 	)
 )
 
