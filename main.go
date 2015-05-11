@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"log"
 	"net/http"
-	"os"
+	"sync"
 	"time"
 
 	"github.com/antonlindstrom/mesos_stats"
@@ -15,8 +15,11 @@ import (
 )
 
 var (
-	configFile  = flag.String("config.file", "", "Path to config file.")
-	metricsPath = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+	addr           string
+	masterURL      string
+	metricsPath    string
+	port           int
+	scrapeInterval time.Duration
 )
 
 var (
@@ -62,104 +65,19 @@ var (
 	)
 )
 
-type Config struct {
-	Port      string      `json:"port"`
-	Interval  string      `json:"scrape_interval"`
-	Endpoints *[]Endpoint `json:"endpoints"`
-}
-
-type Endpoint struct {
-	Name       string        `json:"name"`
-	Target     string        `json:"target"`
-	Interval   string        `json:"scrape_interval,omitempty"`
-	TimeoutStr string        `json:"timeout,omitempty"`
-	Timeout    time.Duration `json:"-"`
-}
-
-func newConfig() (*Config, error) {
-	var config Config
-
-	file, err := ioutil.ReadFile(*configFile)
-	if err != nil {
-		return nil, err
-	}
-
-	err = json.Unmarshal(file, &config)
-	return &config, err
-}
-
-func request(e Endpoint) error {
-	client := http.Client{Timeout: 3 * time.Second}
-
-	resp, err := client.Get(e.Target + "/monitor/statistics.json")
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var stats []mesos_stats.Monitor
-
-	err = json.Unmarshal(body, &stats)
-	if err != nil {
-		return err
-	}
-
-	for _, t := range stats {
-		cpuLimitVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusLimit)
-		cpuSysVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusSystemTimeSecs)
-		cpuUsrVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusUserTimeSecs)
-		memLimitVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(float64(t.Statistics.MemLimitBytes))
-		memRssVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(float64(t.Statistics.MemRssBytes))
-	}
-
-	return err
-}
-
-func requestRunner(e Endpoint) {
-	for {
-		err := request(e)
-		if err != nil {
-			glog.Warningln(err)
-		}
-
-		t, err := time.ParseDuration(e.Interval)
-		if err != nil {
-			glog.Warningln(err)
-			t = 30 * time.Second
-		}
-
-		time.Sleep(t)
-	}
-}
-
-func processRequests(c *Config) {
-	for _, endpoint := range *c.Endpoints {
-		glog.Infof("Found %s\n", endpoint.Name)
-
-		if len(endpoint.Interval) == 0 {
-			endpoint.Interval = c.Interval
-		}
-
-		if len(endpoint.TimeoutStr) != 0 {
-			t, err := time.ParseDuration(endpoint.TimeoutStr)
-			if err != nil {
-				glog.Fatalf("Invalid specification of time.Duration: %s\n", err)
-			}
-			endpoint.Timeout = t
-		} else {
-			endpoint.Timeout = 3 * time.Second
-		}
-
-		go requestRunner(endpoint)
-	}
+var httpClient = http.Client{
+	Timeout: 5 * time.Second,
 }
 
 func init() {
+	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+	flag.IntVar(&port, "port", 9105, "Expose metrics on port")
+	flag.StringVar(&masterURL, "target", "http://mesos-master.example.com", "Mesos master URL")
+	flag.DurationVar(&scrapeInterval, "scrapeIntreval", (10 * time.Second), "Scrape interval")
+	flag.Parse()
+
+	addr = fmt.Sprint(":", port)
+
 	prometheus.MustRegister(cpuLimitVal)
 	prometheus.MustRegister(cpuSysVal)
 	prometheus.MustRegister(cpuUsrVal)
@@ -167,38 +85,152 @@ func init() {
 	prometheus.MustRegister(memRssVal)
 }
 
-func main() {
-	flag.Parse()
+var ActiveSlaves struct {
+	sync.Mutex
+	Hostnames []string
+}
 
-	if len(*configFile) < 2 {
-		fmt.Printf("Error: Flag -config.file is required.\n")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
+func LockActiveSlaves(f func()) {
+	ActiveSlaves.Lock()
+	defer ActiveSlaves.Unlock()
+	f()
+}
 
-	config, err := newConfig()
-	if err != nil {
-		fmt.Printf("Configuration error: %s\n", err)
-		os.Exit(2)
-	}
-
-	go func() {
-		http.Handle(*metricsPath, prometheus.Handler())
-		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "OK")
-		})
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
-		})
-
-		processRequests(config)
-
-		glog.Infof("Starting up on %s\n", config.Port)
-		err := http.ListenAndServe(":"+config.Port, nil)
-		if err != nil {
-			glog.Fatal(err)
+func Periodic(f func(), interval time.Duration) {
+	f()
+	for {
+		select {
+		case <-time.After(interval):
+			f()
 		}
-	}()
+	}
+}
 
-	select {}
+func request(host string) error {
+	resp, err := httpClient.Get(host + "/monitor/statistics.json")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var stats []mesos_stats.Monitor
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return err
+	}
+
+	for _, t := range stats {
+		cpuLimitVal.WithLabelValues(t.Source, host, t.FrameworkId).
+			Set(t.Statistics.CpusLimit)
+
+		cpuSysVal.WithLabelValues(t.Source, host, t.FrameworkId).
+			Set(t.Statistics.CpusSystemTimeSecs)
+
+		cpuUsrVal.WithLabelValues(t.Source, host, t.FrameworkId).
+			Set(t.Statistics.CpusUserTimeSecs)
+
+		memLimitVal.WithLabelValues(t.Source, host, t.FrameworkId).
+			Set(float64(t.Statistics.MemLimitBytes))
+
+		memRssVal.WithLabelValues(t.Source, host, t.FrameworkId).
+			Set(float64(t.Statistics.MemRssBytes))
+	}
+
+	return nil
+}
+
+func requestRunner() {
+	var hostnames []string
+	LockActiveSlaves(func() {
+		hostnames = ActiveSlaves.Hostnames
+	})
+
+	glog.V(6).Infof("active slaves: %d", len(hostnames))
+
+	var wg sync.WaitGroup
+	wg.Add(len(hostnames))
+	for _, host := range hostnames {
+		go func(host string) {
+			if err := request(host); err != nil {
+				glog.Warningf("%s failed. Error: %s", host, err)
+			}
+
+		}(host)
+	}
+	wg.Wait()
+}
+
+func slaveDiscover() {
+	glog.V(6).Info("discovering slaves...")
+
+	// This will redirect us to the elected mesos master
+	redirectURL := fmt.Sprintf("%s:5050/master/redirect", masterURL)
+	rresp, err := httpClient.Get(redirectURL)
+	if err != nil {
+		glog.Warningf("GET %s failed. Error: %s", masterURL, err)
+		return
+	}
+	defer rresp.Body.Close()
+
+	// This will/should return http://master.ip:5050
+	masterLoc := rresp.Header.Get("Location")
+	if masterLoc == "" {
+		glog.Warningf("%d response missing Location header", rresp.StatusCode)
+		return
+	}
+
+	// Find all active slaves
+	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
+	resp, err := http.Get(stateURL)
+	if err != nil {
+		glog.Warningf("GET %s failed. Error: %s", stateURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	type slave struct {
+		Active   bool   `json:"active"`
+		Hostname string `json:"hostname"`
+	}
+
+	var req struct {
+		Slaves []*slave `json:"slaves"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&req); err != nil {
+		glog.Warningf("failed to deserialize request: %s", err)
+		return
+	}
+
+	var slaveHostnames []string
+	for _, slave := range req.Slaves {
+		if slave.Active {
+			slaveHostnames = append(slaveHostnames, slave.Hostname)
+		}
+	}
+
+	glog.V(6).Infof("%d slaves discovered", len(slaveHostnames))
+
+	LockActiveSlaves(func() {
+		ActiveSlaves.Hostnames = slaveHostnames
+	})
+}
+
+func main() {
+
+	// Refresh the nr. of mesos slaves every 10 minute
+	go Periodic(slaveDiscover, (10 * time.Minute))
+	// Fetch slave metrics every scrapeInterval
+	go Periodic(requestRunner, scrapeInterval)
+
+	http.Handle(metricsPath, prometheus.Handler())
+	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "OK")
+	})
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, metricsPath, http.StatusMovedPermanently)
+	})
+
+	glog.Info("starting mesos_exporter on port ", port)
+
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
