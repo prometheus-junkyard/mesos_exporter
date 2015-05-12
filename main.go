@@ -70,10 +70,10 @@ var httpClient = http.Client{
 }
 
 func init() {
-	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "path under which to expose metrics.")
 	flag.IntVar(&port, "port", 9105, "Expose metrics on port")
-	flag.StringVar(&masterURL, "target", "http://mesos-master.example.com", "Mesos master URL")
-	flag.DurationVar(&scrapeInterval, "scrapeIntreval", (10 * time.Second), "Scrape interval")
+	flag.StringVar(&masterURL, "mesos_master", "http://mesos-master.example.com", "mesos master URL")
+	flag.DurationVar(&scrapeInterval, "interval", (60 * time.Second), "scrape interval duration")
 	flag.Parse()
 
 	addr = fmt.Sprint(":", port)
@@ -107,7 +107,8 @@ func Periodic(f func(), interval time.Duration) {
 }
 
 func request(host string) error {
-	resp, err := httpClient.Get(host + "/monitor/statistics.json")
+	monitorURL := fmt.Sprintf("http://%s:5051/monitor/statistics.json", host)
+	resp, err := httpClient.Get(monitorURL)
 	if err != nil {
 		return err
 	}
@@ -150,10 +151,11 @@ func requestRunner() {
 	wg.Add(len(hostnames))
 	for _, host := range hostnames {
 		go func(host string) {
+			defer wg.Done()
+
 			if err := request(host); err != nil {
 				glog.Warningf("%s failed. Error: %s", host, err)
 			}
-
 		}(host)
 	}
 	wg.Wait()
@@ -164,9 +166,12 @@ func slaveDiscover() {
 
 	// This will redirect us to the elected mesos master
 	redirectURL := fmt.Sprintf("%s:5050/master/redirect", masterURL)
-	rresp, err := httpClient.Get(redirectURL)
+	rReq, _ := http.NewRequest("GET", redirectURL, nil)
+
+	tr := http.Transport{}
+	rresp, err := tr.RoundTrip(rReq)
 	if err != nil {
-		glog.Warningf("GET %s failed. Error: %s", masterURL, err)
+		glog.Warningf("GET %s failed. Error: %s", redirectURL, err)
 		return
 	}
 	defer rresp.Body.Close()
