@@ -17,7 +17,7 @@ web.telemetry-path     | Path under which to expose metrics.
 exporter.mesos-master  | URL to a Mesos master. 
 exporter.interval      | Interval at which to fetch the Mesos slave metrics.
 
-The mesos_exporter uses the [glog][glog] library for logging. With the default
+The mesos_exporter uses the [glog](https://godoc.org/github.com/golang/glog) library for logging. With the default
 parameters, nothing will be logged. Use `-logtostderr` to enable logging to
 stderr and `--help` to see more options about logging.
 
