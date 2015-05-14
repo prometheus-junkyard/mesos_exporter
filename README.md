@@ -1,28 +1,26 @@
 # Prometheus Mesos exporter
 
 This is an exporter for Prometheus to get Mesos data.
+The mesos_exporter gets all active slaves from the Mesos master every 10 minutes. 
 
-The configuration, `config.json` should contain all Mesos slaves you want to
-monitor.
+## Building and running
 
-Prometheus configuration to add this exporter:
+    make
+    ./mesos_exporter <flags>
 
-    job: {
-      name: "mesos-exporter"
-      scrape_interval: "5s"
+### Flags
 
-      target_group: {
-        target: "http://mesosexporter.example.com/metrics"
-      }
-    }
+Name                   | Description
+-----------------------|------------
+web.listen-address     | Address to listen on for web interface and telemetry.
+web.telemetry-path     | Path under which to expose metrics.
+exporter.mesos-master  | URL to a Mesos master. 
+exporter.interval      | Interval at which to fetch the Mesos slave metrics.
 
-Where `http://mesosexporter.example.com/metrics` is the URL to this exporter.
+The mesos_exporter uses the [glog][glog] library for logging. With the default
+parameters, nothing will be logged. Use `-logtostderr` to enable logging to
+stderr and `--help` to see more options about logging.
 
-Building the binary can be done by running `make`.
-
-Run the binary with the following command:
-
-    ./bin/mesos_exporter -config-file=config.json
 
 ### Docker
 

@@ -22,91 +22,68 @@ var (
 	scrapeInterval time.Duration
 )
 
-var (
-	cpuLimitVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_limit",
-			Help:      "Fractional CPU limit.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
-	)
-	cpuSysVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_system_seconds_total",
-			Help:      "Cumulative system CPU time in seconds.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
-	)
-	cpuUsrVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_user_seconds_total",
-			Help:      "Cumulative user CPU time in seconds.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
-	)
-	memLimitVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "memory_limit_bytes",
-			Help:      "Task memory limit in bytes.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
-	)
-	memRssVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "memory_rss_bytes",
-			Help:      "Task memory RSS usage in bytes.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
-	)
-)
-
 var httpClient = http.Client{
 	Timeout: 5 * time.Second,
 }
 
 func init() {
-	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "path under which to expose metrics.")
-	flag.IntVar(&port, "port", 9105, "Expose metrics on port")
-	flag.StringVar(&masterURL, "mesos_master", "http://mesos-master.example.com", "mesos master URL")
-	flag.DurationVar(&scrapeInterval, "interval", (60 * time.Second), "scrape interval duration")
+	flag.StringVar(&addr, "web.listen-address", ":9105", "expose metrics on port")
+	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "address to listen on for web interface and telemetry")
+	flag.StringVar(&masterURL, "exporter.mesos-master", "http://mesos-master.example.com", "mesos master URL")
+	flag.DurationVar(&scrapeInterval, "exporter.interval", (60 * time.Second), "scrape interval duration")
 	flag.Parse()
-
-	addr = fmt.Sprint(":", port)
-
-	prometheus.MustRegister(cpuLimitVal)
-	prometheus.MustRegister(cpuSysVal)
-	prometheus.MustRegister(cpuUsrVal)
-	prometheus.MustRegister(memLimitVal)
-	prometheus.MustRegister(memRssVal)
 }
 
-var ActiveSlaves struct {
-	sync.Mutex
-	Hostnames []string
-}
-
-func LockActiveSlaves(f func()) {
-	ActiveSlaves.Lock()
-	defer ActiveSlaves.Unlock()
-	f()
-}
-
-func Periodic(f func(), interval time.Duration) {
-	f()
-	for {
-		select {
-		case <-time.After(interval):
-			f()
-		}
+type PeriodicExporter struct {
+	sync.RWMutex
+	slaves struct {
+		sync.Mutex
+		hostnames []string
 	}
+	errors  *prometheus.CounterVec
+	metrics []prometheus.Gauge
 }
 
-func request(host string) error {
+func NewMesosExporter(interval time.Duration) *PeriodicExporter {
+	e := &PeriodicExporter{
+		errors: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "exporter",
+				Name:      "scrape_errors",
+				Help:      "Current total scrape errors ",
+			},
+			[]string{"mesos_slave"},
+		),
+		metrics: make([]prometheus.Gauge, 0),
+	}
+
+	// Update nr. of mesos slave every 10 minute
+	go e.runEvery(e.updateSlaves, (10 * time.Minute))
+	// Fetch slave metrics every interval
+	go e.runEvery(e.scrapeSlaves, interval)
+
+	return e
+}
+
+func (e *PeriodicExporter) Describe(ch chan<- *prometheus.Desc) {
+	e.rLockMetrics(func() {
+		for _, m := range e.metrics {
+			m.Describe(ch)
+		}
+	})
+	e.errors.MetricVec.Describe(ch)
+}
+
+func (e *PeriodicExporter) Collect(ch chan<- prometheus.Metric) {
+	e.rLockMetrics(func() {
+		for _, m := range e.metrics {
+			m.Collect(ch)
+		}
+	})
+	e.errors.MetricVec.Collect(ch)
+}
+
+func (e *PeriodicExporter) fetch(host string, ch chan prometheus.Gauge) error {
 	monitorURL := fmt.Sprintf("http://%s:5051/monitor/statistics.json", host)
 	resp, err := httpClient.Get(monitorURL)
 	if err != nil {
@@ -119,49 +96,142 @@ func request(host string) error {
 		return err
 	}
 
-	for _, t := range stats {
-		cpuLimitVal.WithLabelValues(t.Source, host, t.FrameworkId).
-			Set(t.Statistics.CpusLimit)
+	for _, stat := range stats {
+		cpuLimitVal := prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "mesos_task",
+				Name:      "cpu_limit",
+				Help:      "Fractional CPU limit.",
+				ConstLabels: prometheus.Labels{
+					"task":         stat.Source,
+					"mesos_slave":  host,
+					"framework_id": stat.FrameworkId,
+				},
+			},
+		)
+		cpuLimitVal.Set(stat.Statistics.CpusSystemTimeSecs)
 
-		cpuSysVal.WithLabelValues(t.Source, host, t.FrameworkId).
-			Set(t.Statistics.CpusSystemTimeSecs)
+		cpuSysVal := prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "mesos_task",
+				Name:      "cpu_system_seconds_total",
+				Help:      "Cumulative system CPU time in seconds.",
+				ConstLabels: prometheus.Labels{
+					"task":         stat.Source,
+					"mesos_slave":  host,
+					"framework_id": stat.FrameworkId,
+				},
+			},
+		)
+		cpuSysVal.Set(stat.Statistics.CpusSystemTimeSecs)
 
-		cpuUsrVal.WithLabelValues(t.Source, host, t.FrameworkId).
-			Set(t.Statistics.CpusUserTimeSecs)
+		cpuUsrVal := prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "mesos_task",
+				Name:      "cpu_user_seconds_total",
+				Help:      "Cumulative user CPU time in seconds.",
+				ConstLabels: prometheus.Labels{
+					"task":         stat.Source,
+					"mesos_slave":  host,
+					"framework_id": stat.FrameworkId,
+				},
+			},
+		)
+		cpuUsrVal.Set(stat.Statistics.CpusUserTimeSecs)
 
-		memLimitVal.WithLabelValues(t.Source, host, t.FrameworkId).
-			Set(float64(t.Statistics.MemLimitBytes))
+		memLimitVal := prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "mesos_task",
+				Name:      "memory_limit_bytes",
+				Help:      "Task memory limit in bytes.",
+				ConstLabels: prometheus.Labels{
+					"task":         stat.Source,
+					"mesos_slave":  host,
+					"framework_id": stat.FrameworkId,
+				},
+			},
+		)
+		memLimitVal.Set(float64(stat.Statistics.MemLimitBytes))
 
-		memRssVal.WithLabelValues(t.Source, host, t.FrameworkId).
-			Set(float64(t.Statistics.MemRssBytes))
+		memRssVal := prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "mesos_task",
+				Name:      "memory_rss_bytes",
+				Help:      "Task memory RSS usage in bytes.",
+				ConstLabels: prometheus.Labels{
+					"task":         stat.Source,
+					"mesos_slave":  host,
+					"framework_id": stat.FrameworkId,
+				},
+			},
+		)
+		memRssVal.Set(float64(stat.Statistics.MemRssBytes))
+
+		ch <- cpuLimitVal
+		ch <- cpuSysVal
+		ch <- cpuUsrVal
+		ch <- memLimitVal
+		ch <- memRssVal
 	}
 
 	return nil
 }
 
-func requestRunner() {
-	var hostnames []string
-	LockActiveSlaves(func() {
-		hostnames = ActiveSlaves.Hostnames
-	})
+func (e *PeriodicExporter) rLockMetrics(f func()) {
+	e.RLock()
+	defer e.RUnlock()
+	f()
+}
+
+func (e *PeriodicExporter) runEvery(f func(), interval time.Duration) {
+	f()
+	for {
+		select {
+		case <-time.After(interval):
+			f()
+		}
+	}
+}
+
+func (e *PeriodicExporter) setMetrics(ch chan prometheus.Gauge) {
+	metrics := make([]prometheus.Gauge, 0)
+	for metric := range ch {
+		metrics = append(metrics, metric)
+	}
+
+	e.Lock()
+	e.metrics = metrics
+	e.Unlock()
+}
+
+func (e *PeriodicExporter) scrapeSlaves() {
+	e.slaves.Lock()
+	hostnames := e.slaves.hostnames
+	e.slaves.Unlock()
 
 	glog.V(6).Infof("active slaves: %d", len(hostnames))
+
+	ch := make(chan prometheus.Gauge)
+	go e.setMetrics(ch)
 
 	var wg sync.WaitGroup
 	wg.Add(len(hostnames))
 	for _, host := range hostnames {
-		go func(host string) {
+		go func(host string, ch chan prometheus.Gauge) {
 			defer wg.Done()
 
-			if err := request(host); err != nil {
+			if err := e.fetch(host, ch); err != nil {
 				glog.Warningf("%s failed. Error: %s", host, err)
+				e.errors.WithLabelValues(host).Inc()
 			}
-		}(host)
+		}(host, ch)
 	}
 	wg.Wait()
+
+	close(ch)
 }
 
-func slaveDiscover() {
+func (e *PeriodicExporter) updateSlaves() {
 	glog.V(6).Info("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
@@ -215,17 +285,15 @@ func slaveDiscover() {
 
 	glog.V(6).Infof("%d slaves discovered", len(slaveHostnames))
 
-	LockActiveSlaves(func() {
-		ActiveSlaves.Hostnames = slaveHostnames
-	})
+	e.slaves.Lock()
+	defer e.slaves.Unlock()
+	e.slaves.hostnames = slaveHostnames
 }
 
 func main() {
 
-	// Refresh the nr. of mesos slaves every 10 minute
-	go Periodic(slaveDiscover, (10 * time.Minute))
-	// Fetch slave metrics every scrapeInterval
-	go Periodic(requestRunner, scrapeInterval)
+	exporter := NewMesosExporter(scrapeInterval)
+	prometheus.MustRegister(exporter)
 
 	http.Handle(metricsPath, prometheus.Handler())
 	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +303,7 @@ func main() {
 		http.Redirect(w, r, metricsPath, http.StatusMovedPermanently)
 	})
 
-	glog.Info("starting mesos_exporter on port ", port)
+	glog.Info("starting mesos_exporter on ", addr)
 
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
