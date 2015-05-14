@@ -18,7 +18,6 @@ var (
 	addr           string
 	masterURL      string
 	metricsPath    string
-	port           int
 	scrapeInterval time.Duration
 )
 
@@ -252,6 +251,8 @@ func (e *PeriodicExporter) updateSlaves() {
 		glog.Warningf("%d response missing Location header", rresp.StatusCode)
 		return
 	}
+
+	glog.V(6).Infof("current elected master at: %s", masterLoc)
 
 	// Find all active slaves
 	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
