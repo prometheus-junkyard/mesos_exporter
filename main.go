@@ -14,36 +14,30 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// Commandline flags.
 var (
-	addr           string
-	masterURL      string
-	metricsPath    string
-	scrapeInterval time.Duration
+	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
+	masterURL      = flag.String("exporter.mesos-master", "http://mesos-master.example.com", "Mesos master URL")
+	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
+	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
 )
 
 var httpClient = http.Client{
 	Timeout: 5 * time.Second,
 }
 
-func init() {
-	flag.StringVar(&addr, "web.listen-address", ":9105", "expose metrics on port")
-	flag.StringVar(&metricsPath, "web.telemetry-path", "/metrics", "address to listen on for web interface and telemetry")
-	flag.StringVar(&masterURL, "exporter.mesos-master", "http://mesos-master.example.com", "mesos master URL")
-	flag.DurationVar(&scrapeInterval, "exporter.interval", (60 * time.Second), "scrape interval duration")
-	flag.Parse()
-}
-
 type PeriodicExporter struct {
 	sync.RWMutex
-	slaves struct {
+	errors    *prometheus.CounterVec
+	masterURL string
+	metrics   []prometheus.Gauge
+	slaves    struct {
 		sync.Mutex
 		hostnames []string
 	}
-	errors  *prometheus.CounterVec
-	metrics []prometheus.Gauge
 }
 
-func NewMesosExporter(interval time.Duration) *PeriodicExporter {
+func NewMesosExporter(masterURL string, interval time.Duration) *PeriodicExporter {
 	e := &PeriodicExporter{
 		errors: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -53,7 +47,8 @@ func NewMesosExporter(interval time.Duration) *PeriodicExporter {
 			},
 			[]string{"mesos_slave"},
 		),
-		metrics: make([]prometheus.Gauge, 0),
+		masterURL: masterURL,
+		metrics:   make([]prometheus.Gauge, 0),
 	}
 
 	// Update nr. of mesos slave every 10 minute
@@ -234,7 +229,7 @@ func (e *PeriodicExporter) updateSlaves() {
 	glog.V(6).Info("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
-	redirectURL := fmt.Sprintf("%s:5050/master/redirect", masterURL)
+	redirectURL := fmt.Sprintf("%s:5050/master/redirect", e.masterURL)
 	rReq, _ := http.NewRequest("GET", redirectURL, nil)
 
 	tr := http.Transport{}
@@ -292,19 +287,20 @@ func (e *PeriodicExporter) updateSlaves() {
 }
 
 func main() {
+	flag.Parse()
 
-	exporter := NewMesosExporter(scrapeInterval)
+	exporter := NewMesosExporter(*masterURL, *scrapeInterval)
 	prometheus.MustRegister(exporter)
 
-	http.Handle(metricsPath, prometheus.Handler())
+	http.Handle(*metricsPath, prometheus.Handler())
 	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "OK")
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, metricsPath, http.StatusMovedPermanently)
+		http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
 	})
 
-	glog.Info("starting mesos_exporter on ", addr)
+	glog.Info("starting mesos_exporter on ", *addr)
 
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(*addr, nil))
 }
