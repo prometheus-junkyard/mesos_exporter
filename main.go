@@ -286,8 +286,8 @@ func (e *PeriodicExporter) updateSlaves() {
 	glog.V(6).Infof("%d slaves discovered", len(slaveHostnames))
 
 	e.slaves.Lock()
-	defer e.slaves.Unlock()
 	e.slaves.hostnames = slaveHostnames
+	e.slaves.Unlock()
 }
 
 func main() {
