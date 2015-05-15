@@ -14,6 +14,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const concurrentFetch = 100
+
 // Commandline flags.
 var (
 	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
@@ -77,98 +79,104 @@ func (e *PeriodicExporter) Collect(ch chan<- prometheus.Metric) {
 	e.errors.MetricVec.Collect(ch)
 }
 
-func (e *PeriodicExporter) fetch(host string, ch chan prometheus.Gauge) error {
-	monitorURL := fmt.Sprintf("http://%s:5051/monitor/statistics.json", host)
-	resp, err := httpClient.Get(monitorURL)
-	if err != nil {
-		return err
+func (e *PeriodicExporter) fetch(dispatchCh chan string, ch chan prometheus.Gauge, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for host := range dispatchCh {
+		monitorURL := fmt.Sprintf("http://%s:5051/monitor/statistics.json", host)
+		resp, err := httpClient.Get(monitorURL)
+		if err != nil {
+			glog.Warningf("GET %s failed. Error: %s", monitorURL, err)
+			e.errors.WithLabelValues(host).Inc()
+			continue
+		}
+		defer resp.Body.Close()
+
+		var stats []mesos_stats.Monitor
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			glog.Warningf("failed to deserialize request: %s", err)
+			e.errors.WithLabelValues(host).Inc()
+			continue
+		}
+
+		for _, stat := range stats {
+			cpuLimitVal := prometheus.NewGauge(
+				prometheus.GaugeOpts{
+					Namespace: "mesos_task",
+					Name:      "cpu_limit",
+					Help:      "Fractional CPU limit.",
+					ConstLabels: prometheus.Labels{
+						"task":         stat.Source,
+						"mesos_slave":  host,
+						"framework_id": stat.FrameworkId,
+					},
+				},
+			)
+			cpuLimitVal.Set(stat.Statistics.CpusSystemTimeSecs)
+
+			cpuSysVal := prometheus.NewGauge(
+				prometheus.GaugeOpts{
+					Namespace: "mesos_task",
+					Name:      "cpu_system_seconds_total",
+					Help:      "Cumulative system CPU time in seconds.",
+					ConstLabels: prometheus.Labels{
+						"task":         stat.Source,
+						"mesos_slave":  host,
+						"framework_id": stat.FrameworkId,
+					},
+				},
+			)
+			cpuSysVal.Set(stat.Statistics.CpusSystemTimeSecs)
+
+			cpuUsrVal := prometheus.NewGauge(
+				prometheus.GaugeOpts{
+					Namespace: "mesos_task",
+					Name:      "cpu_user_seconds_total",
+					Help:      "Cumulative user CPU time in seconds.",
+					ConstLabels: prometheus.Labels{
+						"task":         stat.Source,
+						"mesos_slave":  host,
+						"framework_id": stat.FrameworkId,
+					},
+				},
+			)
+			cpuUsrVal.Set(stat.Statistics.CpusUserTimeSecs)
+
+			memLimitVal := prometheus.NewGauge(
+				prometheus.GaugeOpts{
+					Namespace: "mesos_task",
+					Name:      "memory_limit_bytes",
+					Help:      "Task memory limit in bytes.",
+					ConstLabels: prometheus.Labels{
+						"task":         stat.Source,
+						"mesos_slave":  host,
+						"framework_id": stat.FrameworkId,
+					},
+				},
+			)
+			memLimitVal.Set(float64(stat.Statistics.MemLimitBytes))
+
+			memRssVal := prometheus.NewGauge(
+				prometheus.GaugeOpts{
+					Namespace: "mesos_task",
+					Name:      "memory_rss_bytes",
+					Help:      "Task memory RSS usage in bytes.",
+					ConstLabels: prometheus.Labels{
+						"task":         stat.Source,
+						"mesos_slave":  host,
+						"framework_id": stat.FrameworkId,
+					},
+				},
+			)
+			memRssVal.Set(float64(stat.Statistics.MemRssBytes))
+
+			ch <- cpuLimitVal
+			ch <- cpuSysVal
+			ch <- cpuUsrVal
+			ch <- memLimitVal
+			ch <- memRssVal
+		}
 	}
-	defer resp.Body.Close()
-
-	var stats []mesos_stats.Monitor
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return err
-	}
-
-	for _, stat := range stats {
-		cpuLimitVal := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "mesos_task",
-				Name:      "cpu_limit",
-				Help:      "Fractional CPU limit.",
-				ConstLabels: prometheus.Labels{
-					"task":         stat.Source,
-					"mesos_slave":  host,
-					"framework_id": stat.FrameworkId,
-				},
-			},
-		)
-		cpuLimitVal.Set(stat.Statistics.CpusSystemTimeSecs)
-
-		cpuSysVal := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "mesos_task",
-				Name:      "cpu_system_seconds_total",
-				Help:      "Cumulative system CPU time in seconds.",
-				ConstLabels: prometheus.Labels{
-					"task":         stat.Source,
-					"mesos_slave":  host,
-					"framework_id": stat.FrameworkId,
-				},
-			},
-		)
-		cpuSysVal.Set(stat.Statistics.CpusSystemTimeSecs)
-
-		cpuUsrVal := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "mesos_task",
-				Name:      "cpu_user_seconds_total",
-				Help:      "Cumulative user CPU time in seconds.",
-				ConstLabels: prometheus.Labels{
-					"task":         stat.Source,
-					"mesos_slave":  host,
-					"framework_id": stat.FrameworkId,
-				},
-			},
-		)
-		cpuUsrVal.Set(stat.Statistics.CpusUserTimeSecs)
-
-		memLimitVal := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "mesos_task",
-				Name:      "memory_limit_bytes",
-				Help:      "Task memory limit in bytes.",
-				ConstLabels: prometheus.Labels{
-					"task":         stat.Source,
-					"mesos_slave":  host,
-					"framework_id": stat.FrameworkId,
-				},
-			},
-		)
-		memLimitVal.Set(float64(stat.Statistics.MemLimitBytes))
-
-		memRssVal := prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "mesos_task",
-				Name:      "memory_rss_bytes",
-				Help:      "Task memory RSS usage in bytes.",
-				ConstLabels: prometheus.Labels{
-					"task":         stat.Source,
-					"mesos_slave":  host,
-					"framework_id": stat.FrameworkId,
-				},
-			},
-		)
-		memRssVal.Set(float64(stat.Statistics.MemRssBytes))
-
-		ch <- cpuLimitVal
-		ch <- cpuSysVal
-		ch <- cpuUsrVal
-		ch <- memLimitVal
-		ch <- memRssVal
-	}
-
-	return nil
 }
 
 func (e *PeriodicExporter) rLockMetrics(f func()) {
@@ -203,25 +211,32 @@ func (e *PeriodicExporter) scrapeSlaves() {
 	hostnames := e.slaves.hostnames
 	e.slaves.Unlock()
 
-	glog.V(6).Infof("active slaves: %d", len(hostnames))
+	totalHostnames := len(hostnames)
+	glog.V(6).Infof("active slaves: %d", totalHostnames)
 
+	dispatchCh := make(chan string)
 	ch := make(chan prometheus.Gauge)
 	go e.setMetrics(ch)
 
-	var wg sync.WaitGroup
-	wg.Add(len(hostnames))
-	for _, host := range hostnames {
-		go func(host string, ch chan prometheus.Gauge) {
-			defer wg.Done()
-
-			if err := e.fetch(host, ch); err != nil {
-				glog.Warningf("%s failed. Error: %s", host, err)
-				e.errors.WithLabelValues(host).Inc()
-			}
-		}(host, ch)
+	poolSize := concurrentFetch
+	if totalHostnames < concurrentFetch {
+		poolSize = totalHostnames
 	}
-	wg.Wait()
 
+	glog.V(6).Infof("creating fetch pool of size %d", poolSize)
+
+	var wg sync.WaitGroup
+	wg.Add(poolSize)
+	for i := 0; i < poolSize; i++ {
+		go e.fetch(dispatchCh, ch, &wg)
+	}
+
+	for _, host := range hostnames {
+		dispatchCh <- host
+	}
+	close(dispatchCh)
+
+	wg.Wait()
 	close(ch)
 }
 
