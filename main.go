@@ -19,7 +19,9 @@ const concurrentFetch = 100
 // Commandline flags.
 var (
 	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
-	masterURL      = flag.String("exporter.mesos-master", "http://mesos-master.example.com", "Mesos master URL")
+	autoDiscover   = flag.Bool("exporter.discovery", false, "Discover all Mesos slaves")
+	localAddr      = flag.String("exporter.local-address", "127.0.0.1", "Address to connect to the local Mesos slave")
+	masterURL      = flag.String("exporter.discovery.master", "http://mesos-master.example.com", "Mesos master URL")
 	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
 	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
 )
@@ -28,18 +30,25 @@ var httpClient = http.Client{
 	Timeout: 5 * time.Second,
 }
 
+type ExporterOpts struct {
+	autoDiscover bool
+	interval     time.Duration
+	localAddr    string
+	masterURL    string
+}
+
 type PeriodicExporter struct {
 	sync.RWMutex
-	errors    *prometheus.CounterVec
-	masterURL string
-	metrics   []prometheus.Gauge
-	slaves    struct {
+	errors  *prometheus.CounterVec
+	metrics []prometheus.Gauge
+	opts    *ExporterOpts
+	slaves  struct {
 		sync.Mutex
 		hostnames []string
 	}
 }
 
-func NewMesosExporter(masterURL string, interval time.Duration) *PeriodicExporter {
+func NewMesosExporter(opts *ExporterOpts) *PeriodicExporter {
 	e := &PeriodicExporter{
 		errors: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
@@ -49,14 +58,19 @@ func NewMesosExporter(masterURL string, interval time.Duration) *PeriodicExporte
 			},
 			[]string{"mesos_slave"},
 		),
-		masterURL: masterURL,
-		metrics:   make([]prometheus.Gauge, 0),
+		opts:    opts,
+		metrics: make([]prometheus.Gauge, 0),
+	}
+
+	if !e.opts.autoDiscover {
+		glog.Info("auto discovery disabled from command line flag.")
+		glog.Info("using local address: ", e.opts.localAddr)
 	}
 
 	// Update nr. of mesos slave every 10 minute
 	go e.runEvery(e.updateSlaves, (10 * time.Minute))
 	// Fetch slave metrics every interval
-	go e.runEvery(e.scrapeSlaves, interval)
+	go e.runEvery(e.scrapeSlaves, e.opts.interval)
 
 	return e
 }
@@ -79,10 +93,10 @@ func (e *PeriodicExporter) Collect(ch chan<- prometheus.Metric) {
 	e.errors.MetricVec.Collect(ch)
 }
 
-func (e *PeriodicExporter) fetch(dispatchCh chan string, ch chan prometheus.Gauge, wg *sync.WaitGroup) {
+func (e *PeriodicExporter) fetch(inCh chan string, outCh chan prometheus.Gauge, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for host := range dispatchCh {
+	for host := range inCh {
 		monitorURL := fmt.Sprintf("http://%s:5051/monitor/statistics.json", host)
 		resp, err := httpClient.Get(monitorURL)
 		if err != nil {
@@ -170,13 +184,19 @@ func (e *PeriodicExporter) fetch(dispatchCh chan string, ch chan prometheus.Gaug
 			)
 			memRssVal.Set(float64(stat.Statistics.MemRssBytes))
 
-			ch <- cpuLimitVal
-			ch <- cpuSysVal
-			ch <- cpuUsrVal
-			ch <- memLimitVal
-			ch <- memRssVal
+			outCh <- cpuLimitVal
+			outCh <- cpuSysVal
+			outCh <- cpuUsrVal
+			outCh <- memLimitVal
+			outCh <- memRssVal
 		}
 	}
+}
+
+func (e *PeriodicExporter) lockSlaves(f func() []string) []string {
+	e.slaves.Lock()
+	defer e.slaves.Unlock()
+	return f()
 }
 
 func (e *PeriodicExporter) rLockMetrics(f func()) {
@@ -207,9 +227,9 @@ func (e *PeriodicExporter) setMetrics(ch chan prometheus.Gauge) {
 }
 
 func (e *PeriodicExporter) scrapeSlaves() {
-	e.slaves.Lock()
-	hostnames := e.slaves.hostnames
-	e.slaves.Unlock()
+	hostnames := e.lockSlaves(func() []string {
+		return e.slaves.hostnames
+	})
 
 	totalHostnames := len(hostnames)
 	glog.V(6).Infof("active slaves: %d", totalHostnames)
@@ -241,10 +261,18 @@ func (e *PeriodicExporter) scrapeSlaves() {
 }
 
 func (e *PeriodicExporter) updateSlaves() {
+	if !e.opts.autoDiscover {
+		e.slaves.hostnames = e.lockSlaves(func() []string {
+			return []string{e.opts.localAddr}
+		})
+
+		return
+	}
+
 	glog.V(6).Info("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
-	redirectURL := fmt.Sprintf("%s:5050/master/redirect", e.masterURL)
+	redirectURL := fmt.Sprintf("%s:5050/master/redirect", e.opts.masterURL)
 	rReq, _ := http.NewRequest("GET", redirectURL, nil)
 
 	tr := http.Transport{}
@@ -296,15 +324,21 @@ func (e *PeriodicExporter) updateSlaves() {
 
 	glog.V(6).Infof("%d slaves discovered", len(slaveHostnames))
 
-	e.slaves.Lock()
-	e.slaves.hostnames = slaveHostnames
-	e.slaves.Unlock()
+	e.slaves.hostnames = e.lockSlaves(func() []string {
+		return slaveHostnames
+	})
 }
 
 func main() {
 	flag.Parse()
 
-	exporter := NewMesosExporter(*masterURL, *scrapeInterval)
+	opts := &ExporterOpts{
+		autoDiscover: *autoDiscover,
+		interval:     *scrapeInterval,
+		localAddr:    *localAddr,
+		masterURL:    *masterURL,
+	}
+	exporter := NewMesosExporter(opts)
 	prometheus.MustRegister(exporter)
 
 	http.Handle(*metricsPath, prometheus.Handler())
