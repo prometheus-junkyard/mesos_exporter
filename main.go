@@ -61,14 +61,16 @@ func NewMesosExporter(opts *ExporterOpts) *PeriodicExporter {
 		opts:    opts,
 		metrics: make([]prometheus.Gauge, 0),
 	}
+	e.slaves.hostnames = []string{e.opts.localAddr}
 
-	if !e.opts.autoDiscover {
-		glog.Info("auto discovery disabled from command line flag.")
-		glog.Info("using local address: ", e.opts.localAddr)
+	if e.opts.autoDiscover {
+		glog.Info("auto discovery enabled from command line flag.")
+
+		// Update nr. of mesos slave every 10 minute
+		e.slaves.hostnames = []string{}
+		go e.runEvery(e.updateSlaves, (10 * time.Minute))
 	}
 
-	// Update nr. of mesos slave every 10 minute
-	go e.runEvery(e.updateSlaves, (10 * time.Minute))
 	// Fetch slave metrics every interval
 	go e.runEvery(e.scrapeSlaves, e.opts.interval)
 
@@ -261,14 +263,6 @@ func (e *PeriodicExporter) scrapeSlaves() {
 }
 
 func (e *PeriodicExporter) updateSlaves() {
-	if !e.opts.autoDiscover {
-		e.slaves.hostnames = e.lockSlaves(func() []string {
-			return []string{e.opts.localAddr}
-		})
-
-		return
-	}
-
 	glog.V(6).Info("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
