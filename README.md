@@ -37,15 +37,15 @@ This mode lets you have one exporter per Mesos cluster.
 ### Docker
 
 A Docker container is available at
-https://registry.hub.docker.com/u/antonlindstrom/mesos-exporter/
+https://registry.hub.docker.com/u/prom/mesos-exporter
 
 If you want to use it with your own configuration, you can mount it as a
 volume:
 
-    docker run -d -p 4000:4000 antonlindstrom/mesos-exporter
+    docker run -d -p 4000:4000 prom/mesos-exporter
 
 It's also possible to use in your own Dockerfile:
 
-    FROM antonlindstrom/mesos-exporter
+    FROM prom/mesos-exporter
 
 ---
