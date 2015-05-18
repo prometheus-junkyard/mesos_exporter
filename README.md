@@ -26,12 +26,12 @@ stderr and `--help` to see more options about logging.
 ### Modes
 mesos_exporter can operate in two modes: discovery and local.
 
-In local mode only the IP specified with the commandline flag -exporter.local-address will be queried and exported.
+In local mode only the IP specified with the commandline flag `-exporter.local-address` will be queried and exported.
 This mode is to facilitate having one exporter per Mesos slave.
 
-In discovery mode the Mesos slaves is discovered using the -exporter.discovery.master flag. The exporter will fetch
+In discovery mode the Mesos slaves are discovered using the `-exporter.discovery.master` flag. The exporter will fetch
 all slave metrics and export them. 
-This mode let you have one exporter per Mesos cluster. 
+This mode lets you have one exporter per Mesos cluster.
 
 
 ### Docker
