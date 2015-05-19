@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -259,10 +260,16 @@ func (e *periodicExporter) updateSlaves() {
 	tr := http.Transport{}
 	rresp, err := tr.RoundTrip(rReq)
 	if err != nil {
-		glog.Warningf("GET %s failed. Error: %s", redirectURL, err)
+		glog.Warning(err)
 		return
 	}
 	defer rresp.Body.Close()
+
+	_, err = ioutil.ReadAll(rresp.Body)
+	if err != nil {
+		glog.Warning(err)
+		return
+	}
 
 	// This will/should return http://master.ip:5050
 	masterLoc := rresp.Header.Get("Location")
@@ -277,7 +284,7 @@ func (e *periodicExporter) updateSlaves() {
 	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
 	resp, err := http.Get(stateURL)
 	if err != nil {
-		glog.Warningf("GET %s failed. Error: %s", stateURL, err)
+		glog.Warning(err)
 		return
 	}
 	defer resp.Body.Close()
