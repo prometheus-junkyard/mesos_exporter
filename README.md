@@ -15,7 +15,7 @@ web.listen-address         | Address to listen on for web interface and telemetr
 web.telemetry-path         | Path under which to expose metrics.
 exporter.discovery         | Enable auto disovery of elected master and active slaves.
 exporter.discovery.master  | URL to a Mesos master.
-exporter.local-address     | Address to connect to the local slave if not using discovery.
+exporter.local-address     | URL to the local slave if not using discovery.
 exporter.interval          | Interval at which to fetch the Mesos slave metrics.
 
 

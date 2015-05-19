@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,37 +23,37 @@ const concurrentFetch = 100
 var (
 	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
 	autoDiscover   = flag.Bool("exporter.discovery", false, "Discover all Mesos slaves")
-	localAddr      = flag.String("exporter.local-address", "127.0.0.1:5051", "Address to connect to the local Mesos slave")
+	localAddr      = flag.String("exporter.local-address", "http://127.0.0.1:5051", "URL to the local Mesos slave")
 	masterURL      = flag.String("exporter.discovery.master", "http://mesos-master.example.com:5050", "Mesos master URL")
 	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
 	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
 )
 
 var (
-	variableLabels = []string{"task", "mesos_slave", "framework_id"}
+	variableLabels = []string{"task", "slave", "framework_id"}
 
 	cpuLimitDesc = prometheus.NewDesc(
-		prometheus.BuildFQName("", "mesos_task", "cpu_limit"),
+		"mesos_task_cpu_limit",
 		"Fractional CPU limit.",
 		variableLabels, nil,
 	)
 	cpuSysDesc = prometheus.NewDesc(
-		prometheus.BuildFQName("", "mesos_task", "cpu_system_seconds_total"),
+		"mesos_task_cpu_system_seconds_total",
 		"Cumulative system CPU time in seconds.",
 		variableLabels, nil,
 	)
 	cpuUsrDesc = prometheus.NewDesc(
-		prometheus.BuildFQName("", "mesos_task", "cpu_user_seconds_total"),
+		"mesos_task_cpu_user_seconds_total",
 		"Cumulative user CPU time in seconds.",
 		variableLabels, nil,
 	)
 	memLimitDesc = prometheus.NewDesc(
-		prometheus.BuildFQName("", "mesos_task", "memory_limit_bytes"),
+		"mesos_task_memory_limit_bytes",
 		"Task memory limit in bytes.",
 		variableLabels, nil,
 	)
 	memRssDesc = prometheus.NewDesc(
-		prometheus.BuildFQName("", "mesos_task", "memory_rss_bytes"),
+		"mesos_task_memory_rss_bytes",
 		"Task memory RSS usage in bytes.",
 		variableLabels, nil,
 	)
@@ -76,7 +77,7 @@ type periodicExporter struct {
 	opts    *exporterOpts
 	slaves  struct {
 		sync.Mutex
-		hostnames []string
+		urls []string
 	}
 }
 
@@ -92,7 +93,7 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 		),
 		opts: opts,
 	}
-	e.slaves.hostnames = []string{e.opts.localAddr}
+	e.slaves.urls = []string{e.opts.localAddr}
 
 	if e.opts.autoDiscover {
 		glog.Info("auto discovery enabled from command line flag.")
@@ -126,28 +127,34 @@ func (e *periodicExporter) Collect(ch chan<- prometheus.Metric) {
 	e.errors.MetricVec.Collect(ch)
 }
 
-func (e *periodicExporter) fetch(hostChan <-chan string, metricsChan chan<- prometheus.Metric, wg *sync.WaitGroup) {
+func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prometheus.Metric, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for host := range hostChan {
-		host, port, err := net.SplitHostPort(host)
+	for u := range urlChan {
+		u, err := url.Parse(u)
 		if err != nil {
-			glog.Warning("Could not parse network address: ", err)
+			glog.Warning("could not parse slave URL: ", err)
 			continue
 		}
 
-		monitorURL := fmt.Sprintf("http://%s:%s/monitor/statistics.json", host, port)
+		host, _, err := net.SplitHostPort(u.Host)
+		if err != nil {
+			glog.Warning("could not parse network address: ", err)
+			continue
+		}
+
+		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
 		resp, err := httpClient.Get(monitorURL)
 		if err != nil {
-			glog.Warningf("GET %s failed. Error: %s", monitorURL, err)
+			glog.Warning(err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
 		defer resp.Body.Close()
 
 		var stats []mesos_stats.Monitor
-		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-			glog.Warningf("failed to deserialize response: %s", err)
+		if err = json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			glog.Warning("failed to deserialize response: ", err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
@@ -161,7 +168,7 @@ func (e *periodicExporter) fetch(hostChan <-chan string, metricsChan chan<- prom
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				cpuSysDesc,
-				prometheus.GaugeValue,
+				prometheus.CounterValue,
 				float64(stat.Statistics.CpusSystemTimeSecs),
 				stat.Source, host, stat.FrameworkId,
 			)
@@ -173,7 +180,7 @@ func (e *periodicExporter) fetch(hostChan <-chan string, metricsChan chan<- prom
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				memLimitDesc,
-				prometheus.CounterValue,
+				prometheus.GaugeValue,
 				float64(stat.Statistics.MemLimitBytes),
 				stat.Source, host, stat.FrameworkId,
 			)
@@ -206,20 +213,20 @@ func (e *periodicExporter) setMetrics(ch chan prometheus.Metric) {
 
 func (e *periodicExporter) scrapeSlaves() {
 	e.slaves.Lock()
-	hostnames := make([]string, len(e.slaves.hostnames))
-	copy(hostnames, e.slaves.hostnames)
+	urls := make([]string, len(e.slaves.urls))
+	copy(urls, e.slaves.urls)
 	e.slaves.Unlock()
 
-	totalHostnames := len(hostnames)
-	glog.V(6).Infof("active slaves: %d", totalHostnames)
+	urlCount := len(urls)
+	glog.V(6).Infof("active slaves: %d", urlCount)
 
-	hostChan := make(chan string)
+	urlChan := make(chan string)
 	metricsChan := make(chan prometheus.Metric)
 	go e.setMetrics(metricsChan)
 
 	poolSize := concurrentFetch
-	if totalHostnames < concurrentFetch {
-		poolSize = totalHostnames
+	if urlCount < concurrentFetch {
+		poolSize = urlCount
 	}
 
 	glog.V(6).Infof("creating fetch pool of size %d", poolSize)
@@ -227,13 +234,13 @@ func (e *periodicExporter) scrapeSlaves() {
 	var wg sync.WaitGroup
 	wg.Add(poolSize)
 	for i := 0; i < poolSize; i++ {
-		go e.fetch(hostChan, metricsChan, &wg)
+		go e.fetch(urlChan, metricsChan, &wg)
 	}
 
-	for _, host := range hostnames {
-		hostChan <- host
+	for _, url := range urls {
+		urlChan <- url
 	}
-	close(hostChan)
+	close(urlChan)
 
 	wg.Wait()
 	close(metricsChan)
@@ -290,7 +297,7 @@ func (e *periodicExporter) updateSlaves() {
 		return
 	}
 
-	var slaveHostnames []string
+	var slaveURLs []string
 	for _, slave := range req.Slaves {
 		if slave.Active {
 			// Extract slave port from pid
@@ -298,16 +305,16 @@ func (e *periodicExporter) updateSlaves() {
 			if err != nil {
 				port = "5051"
 			}
-			hostname := fmt.Sprintf("%s:%s", slave.Hostname, port)
+			url := fmt.Sprintf("http://%s:%s", slave.Hostname, port)
 
-			slaveHostnames = append(slaveHostnames, hostname)
+			slaveURLs = append(slaveURLs, url)
 		}
 	}
 
-	glog.V(6).Infof("%d slaves discovered", len(slaveHostnames))
+	glog.V(6).Infof("%d slaves discovered", len(slaveURLs))
 
 	e.slaves.Lock()
-	e.slaves.hostnames = slaveHostnames
+	e.slaves.urls = slaveURLs
 	e.slaves.Unlock()
 }
 
