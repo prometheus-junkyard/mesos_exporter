@@ -2,41 +2,50 @@
 
 This is an exporter for Prometheus to get Mesos data.
 
-The configuration, `config.json` should contain all Mesos slaves you want to
-monitor.
+## Building and running
 
-Prometheus configuration to add this exporter:
+    make
+    ./mesos_exporter <flags>
 
-    job: {
-      name: "mesos-exporter"
-      scrape_interval: "5s"
+### Flags
 
-      target_group: {
-        target: "http://mesosexporter.example.com/metrics"
-      }
-    }
+Name                           | Description
+-------------------------------|------------
+web.listen-address             | Address to listen on for web interface and telemetry.
+web.telemetry-path             | Path under which to expose metrics.
+exporter.discovery             | Enable auto disovery of elected master and active slaves.
+exporter.discovery.master-url  | URL to a Mesos master.
+exporter.local-url             | URL to the local slave if not using discovery.
+exporter.interval              | Interval at which to fetch the Mesos slave metrics.
 
-Where `http://mesosexporter.example.com/metrics` is the URL to this exporter.
 
-Building the binary can be done by running `make`.
+The mesos_exporter uses the [glog](https://godoc.org/github.com/golang/glog) library for logging. With the default
+parameters, nothing will be logged. Use `-logtostderr` to enable logging to
+stderr and `--help` to see more options about logging.
 
-Run the binary with the following command:
+### Modes
+mesos_exporter can operate in two modes: discovery and local.
 
-    ./bin/mesos_exporter -config-file=config.json
+In local mode only the IP specified with the commandline flag `-exporter.local-address` will be queried and exported.
+This mode is to facilitate having one exporter per Mesos slave.
+
+In discovery mode the Mesos slaves are discovered using the `-exporter.discovery.master` flag. The exporter will fetch
+all slave metrics and export them. 
+This mode lets you have one exporter per Mesos cluster.
+
 
 ### Docker
 
 A Docker container is available at
-https://registry.hub.docker.com/u/antonlindstrom/mesos-exporter/
+https://registry.hub.docker.com/u/prom/mesos-exporter
 
 If you want to use it with your own configuration, you can mount it as a
 volume:
 
-    docker run -d -v /root/config.json:/config.json -p 4000:4000 antonlindstrom/mesos-exporter
+    docker run -d -p 4000:4000 prom/mesos-exporter
 
 It's also possible to use in your own Dockerfile:
 
-    FROM antonlindstrom/mesos-exporter
-    ADD config.json /config.json
+    FROM prom/mesos-exporter
 
 ---

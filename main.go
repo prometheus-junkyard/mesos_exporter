@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"log"
+	"net"
 	"net/http"
-	"os"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/antonlindstrom/mesos_stats"
@@ -14,191 +17,336 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const concurrentFetch = 100
+
+// Commandline flags.
 var (
-	configFile  = flag.String("config.file", "", "Path to config file.")
-	metricsPath = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
+	autoDiscover   = flag.Bool("exporter.discovery", false, "Discover all Mesos slaves")
+	localURL       = flag.String("exporter.local-url", "http://127.0.0.1:5051", "URL to the local Mesos slave")
+	masterURL      = flag.String("exporter.discovery.master-url", "http://mesos-master.example.com:5050", "Mesos master URL")
+	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
+	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
 )
 
 var (
-	cpuLimitVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_limit",
-			Help:      "Fractional CPU limit.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
+	variableLabels = []string{"task", "slave", "framework_id"}
+
+	cpuLimitDesc = prometheus.NewDesc(
+		"mesos_task_cpu_limit",
+		"Fractional CPU limit.",
+		variableLabels, nil,
 	)
-	cpuSysVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_system_seconds_total",
-			Help:      "Cumulative system CPU time in seconds.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
+	cpuSysDesc = prometheus.NewDesc(
+		"mesos_task_cpu_system_seconds_total",
+		"Cumulative system CPU time in seconds.",
+		variableLabels, nil,
 	)
-	cpuUsrVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "cpu_user_seconds_total",
-			Help:      "Cumulative user CPU time in seconds.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
+	cpuUsrDesc = prometheus.NewDesc(
+		"mesos_task_cpu_user_seconds_total",
+		"Cumulative user CPU time in seconds.",
+		variableLabels, nil,
 	)
-	memLimitVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "memory_limit_bytes",
-			Help:      "Task memory limit in bytes.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
+	memLimitDesc = prometheus.NewDesc(
+		"mesos_task_memory_limit_bytes",
+		"Task memory limit in bytes.",
+		variableLabels, nil,
 	)
-	memRssVal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mesos_task",
-			Name:      "memory_rss_bytes",
-			Help:      "Task memory RSS usage in bytes.",
-		},
-		[]string{"task", "mesos_slave", "framework_id"},
+	memRssDesc = prometheus.NewDesc(
+		"mesos_task_memory_rss_bytes",
+		"Task memory RSS usage in bytes.",
+		variableLabels, nil,
 	)
 )
 
-type Config struct {
-	Port      string      `json:"port"`
-	Interval  string      `json:"scrape_interval"`
-	Endpoints *[]Endpoint `json:"endpoints"`
+var httpClient = http.Client{
+	Timeout: 5 * time.Second,
 }
 
-type Endpoint struct {
-	Name       string        `json:"name"`
-	Target     string        `json:"target"`
-	Interval   string        `json:"scrape_interval,omitempty"`
-	TimeoutStr string        `json:"timeout,omitempty"`
-	Timeout    time.Duration `json:"-"`
+type exporterOpts struct {
+	autoDiscover bool
+	interval     time.Duration
+	localURL     string
+	masterURL    string
 }
 
-func newConfig() (*Config, error) {
-	var config Config
+type periodicExporter struct {
+	sync.RWMutex
+	errors  *prometheus.CounterVec
+	metrics []prometheus.Metric
+	opts    *exporterOpts
+	slaves  struct {
+		sync.Mutex
+		urls []string
+	}
+}
 
-	file, err := ioutil.ReadFile(*configFile)
-	if err != nil {
-		return nil, err
+func newMesosExporter(opts *exporterOpts) *periodicExporter {
+	e := &periodicExporter{
+		errors: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "mesos_exporter",
+				Name:      "slave_scrape_errors_total",
+				Help:      "Current total scrape errors",
+			},
+			[]string{"slave"},
+		),
+		opts: opts,
+	}
+	e.slaves.urls = []string{e.opts.localURL}
+
+	if e.opts.autoDiscover {
+		glog.Info("auto discovery enabled from command line flag.")
+
+		// Update nr. of mesos slaves every 10 minutes
+		e.updateSlaves()
+		go runEvery(e.updateSlaves, 10*time.Minute)
 	}
 
-	err = json.Unmarshal(file, &config)
-	return &config, err
+	// Fetch slave metrics every interval
+	go runEvery(e.scrapeSlaves, e.opts.interval)
+
+	return e
 }
 
-func request(e Endpoint) error {
-	client := http.Client{Timeout: 3 * time.Second}
+func (e *periodicExporter) Describe(ch chan<- *prometheus.Desc) {
+	e.rLockMetrics(func() {
+		for _, m := range e.metrics {
+			ch <- m.Desc()
+		}
+	})
+	e.errors.MetricVec.Describe(ch)
+}
 
-	resp, err := client.Get(e.Target + "/monitor/statistics.json")
-	if err != nil {
-		return err
+func (e *periodicExporter) Collect(ch chan<- prometheus.Metric) {
+	e.rLockMetrics(func() {
+		for _, m := range e.metrics {
+			ch <- m
+		}
+	})
+	e.errors.MetricVec.Collect(ch)
+}
+
+func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prometheus.Metric, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for u := range urlChan {
+		u, err := url.Parse(u)
+		if err != nil {
+			glog.Warning("could not parse slave URL: ", err)
+			continue
+		}
+
+		host, _, err := net.SplitHostPort(u.Host)
+		if err != nil {
+			glog.Warning("could not parse network address: ", err)
+			continue
+		}
+
+		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
+		resp, err := httpClient.Get(monitorURL)
+		if err != nil {
+			glog.Warning(err)
+			e.errors.WithLabelValues(host).Inc()
+			continue
+		}
+		defer resp.Body.Close()
+
+		var stats []mesos_stats.Monitor
+		if err = json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			glog.Warning("failed to deserialize response: ", err)
+			e.errors.WithLabelValues(host).Inc()
+			continue
+		}
+
+		for _, stat := range stats {
+			metricsChan <- prometheus.MustNewConstMetric(
+				cpuLimitDesc,
+				prometheus.GaugeValue,
+				float64(stat.Statistics.CpusLimit),
+				stat.Source, host, stat.FrameworkId,
+			)
+			metricsChan <- prometheus.MustNewConstMetric(
+				cpuSysDesc,
+				prometheus.CounterValue,
+				float64(stat.Statistics.CpusSystemTimeSecs),
+				stat.Source, host, stat.FrameworkId,
+			)
+			metricsChan <- prometheus.MustNewConstMetric(
+				cpuUsrDesc,
+				prometheus.CounterValue,
+				float64(stat.Statistics.CpusUserTimeSecs),
+				stat.Source, host, stat.FrameworkId,
+			)
+			metricsChan <- prometheus.MustNewConstMetric(
+				memLimitDesc,
+				prometheus.GaugeValue,
+				float64(stat.Statistics.MemLimitBytes),
+				stat.Source, host, stat.FrameworkId,
+			)
+			metricsChan <- prometheus.MustNewConstMetric(
+				memRssDesc,
+				prometheus.GaugeValue,
+				float64(stat.Statistics.MemRssBytes),
+				stat.Source, host, stat.FrameworkId,
+			)
+		}
+	}
+}
+
+func (e *periodicExporter) rLockMetrics(f func()) {
+	e.RLock()
+	defer e.RUnlock()
+	f()
+}
+
+func (e *periodicExporter) setMetrics(ch chan prometheus.Metric) {
+	metrics := make([]prometheus.Metric, 0)
+	for metric := range ch {
+		metrics = append(metrics, metric)
 	}
 
+	e.Lock()
+	e.metrics = metrics
+	e.Unlock()
+}
+
+func (e *periodicExporter) scrapeSlaves() {
+	e.slaves.Lock()
+	urls := make([]string, len(e.slaves.urls))
+	copy(urls, e.slaves.urls)
+	e.slaves.Unlock()
+
+	urlCount := len(urls)
+	glog.V(6).Infof("active slaves: %d", urlCount)
+
+	urlChan := make(chan string)
+	metricsChan := make(chan prometheus.Metric)
+	go e.setMetrics(metricsChan)
+
+	poolSize := concurrentFetch
+	if urlCount < concurrentFetch {
+		poolSize = urlCount
+	}
+
+	glog.V(6).Infof("creating fetch pool of size %d", poolSize)
+
+	var wg sync.WaitGroup
+	wg.Add(poolSize)
+	for i := 0; i < poolSize; i++ {
+		go e.fetch(urlChan, metricsChan, &wg)
+	}
+
+	for _, url := range urls {
+		urlChan <- url
+	}
+	close(urlChan)
+
+	wg.Wait()
+	close(metricsChan)
+}
+
+func (e *periodicExporter) updateSlaves() {
+	glog.V(6).Info("discovering slaves...")
+
+	// This will redirect us to the elected mesos master
+	redirectURL := fmt.Sprintf("%s/master/redirect", e.opts.masterURL)
+	rReq, err := http.NewRequest("GET", redirectURL, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	tr := http.Transport{
+		DisableKeepAlives: true,
+	}
+	rresp, err := tr.RoundTrip(rReq)
+	if err != nil {
+		glog.Warning(err)
+		return
+	}
+	defer rresp.Body.Close()
+
+	// This will/should return http://master.ip:5050
+	masterLoc := rresp.Header.Get("Location")
+	if masterLoc == "" {
+		glog.Warningf("%d response missing Location header", rresp.StatusCode)
+		return
+	}
+
+	glog.V(6).Infof("current elected master at: %s", masterLoc)
+
+	// Find all active slaves
+	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
+	resp, err := http.Get(stateURL)
+	if err != nil {
+		glog.Warning(err)
+		return
+	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
+
+	type slave struct {
+		Active   bool   `json:"active"`
+		Hostname string `json:"hostname"`
+		Pid      string `json:"pid"`
 	}
 
-	var stats []mesos_stats.Monitor
-
-	err = json.Unmarshal(body, &stats)
-	if err != nil {
-		return err
+	var req struct {
+		Slaves []*slave `json:"slaves"`
 	}
 
-	for _, t := range stats {
-		cpuLimitVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusLimit)
-		cpuSysVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusSystemTimeSecs)
-		cpuUsrVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(t.Statistics.CpusUserTimeSecs)
-		memLimitVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(float64(t.Statistics.MemLimitBytes))
-		memRssVal.WithLabelValues(t.Source, e.Name, t.FrameworkId).Set(float64(t.Statistics.MemRssBytes))
+	if err := json.NewDecoder(resp.Body).Decode(&req); err != nil {
+		glog.Warningf("failed to deserialize request: %s", err)
+		return
 	}
 
-	return err
-}
-
-func requestRunner(e Endpoint) {
-	for {
-		err := request(e)
-		if err != nil {
-			glog.Warningln(err)
-		}
-
-		t, err := time.ParseDuration(e.Interval)
-		if err != nil {
-			glog.Warningln(err)
-			t = 30 * time.Second
-		}
-
-		time.Sleep(t)
-	}
-}
-
-func processRequests(c *Config) {
-	for _, endpoint := range *c.Endpoints {
-		glog.Infof("Found %s\n", endpoint.Name)
-
-		if len(endpoint.Interval) == 0 {
-			endpoint.Interval = c.Interval
-		}
-
-		if len(endpoint.TimeoutStr) != 0 {
-			t, err := time.ParseDuration(endpoint.TimeoutStr)
+	var slaveURLs []string
+	for _, slave := range req.Slaves {
+		if slave.Active {
+			// Extract slave port from pid
+			_, port, err := net.SplitHostPort(slave.Pid)
 			if err != nil {
-				glog.Fatalf("Invalid specification of time.Duration: %s\n", err)
+				port = "5051"
 			}
-			endpoint.Timeout = t
-		} else {
-			endpoint.Timeout = 3 * time.Second
-		}
+			url := fmt.Sprintf("http://%s:%s", slave.Hostname, port)
 
-		go requestRunner(endpoint)
+			slaveURLs = append(slaveURLs, url)
+		}
 	}
+
+	glog.V(6).Infof("%d slaves discovered", len(slaveURLs))
+
+	e.slaves.Lock()
+	e.slaves.urls = slaveURLs
+	e.slaves.Unlock()
 }
 
-func init() {
-	prometheus.MustRegister(cpuLimitVal)
-	prometheus.MustRegister(cpuSysVal)
-	prometheus.MustRegister(cpuUsrVal)
-	prometheus.MustRegister(memLimitVal)
-	prometheus.MustRegister(memRssVal)
+func runEvery(f func(), interval time.Duration) {
+	for _ = range time.NewTicker(interval).C {
+		f()
+	}
 }
 
 func main() {
 	flag.Parse()
 
-	if len(*configFile) < 2 {
-		fmt.Printf("Error: Flag -config.file is required.\n")
-		flag.PrintDefaults()
-		os.Exit(1)
+	opts := &exporterOpts{
+		autoDiscover: *autoDiscover,
+		interval:     *scrapeInterval,
+		localURL:     strings.TrimRight(*localURL, "/"),
+		masterURL:    strings.TrimRight(*masterURL, "/"),
 	}
+	exporter := newMesosExporter(opts)
+	prometheus.MustRegister(exporter)
 
-	config, err := newConfig()
-	if err != nil {
-		fmt.Printf("Configuration error: %s\n", err)
-		os.Exit(2)
-	}
+	http.Handle(*metricsPath, prometheus.Handler())
+	http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "OK")
+	})
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
+	})
 
-	go func() {
-		http.Handle(*metricsPath, prometheus.Handler())
-		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "OK")
-		})
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
-		})
+	glog.Info("starting mesos_exporter on ", *addr)
 
-		processRequests(config)
-
-		glog.Infof("Starting up on %s\n", config.Port)
-		err := http.ListenAndServe(":"+config.Port, nil)
-		if err != nil {
-			glog.Fatal(err)
-		}
-	}()
-
-	select {}
+	log.Fatal(http.ListenAndServe(*addr, nil))
 }
