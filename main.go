@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -257,19 +256,15 @@ func (e *periodicExporter) updateSlaves() {
 		panic(err)
 	}
 
-	tr := http.Transport{}
+	tr := http.Transport{
+		DisableKeepAlives: true,
+	}
 	rresp, err := tr.RoundTrip(rReq)
 	if err != nil {
 		glog.Warning(err)
 		return
 	}
 	defer rresp.Body.Close()
-
-	_, err = ioutil.ReadAll(rresp.Body)
-	if err != nil {
-		glog.Warning(err)
-		return
-	}
 
 	// This will/should return http://master.ip:5050
 	masterLoc := rresp.Header.Get("Location")
