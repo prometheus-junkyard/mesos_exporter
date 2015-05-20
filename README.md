@@ -9,14 +9,14 @@ This is an exporter for Prometheus to get Mesos data.
 
 ### Flags
 
-Name                       | Description
----------------------------|------------
-web.listen-address         | Address to listen on for web interface and telemetry.
-web.telemetry-path         | Path under which to expose metrics.
-exporter.discovery         | Enable auto disovery of elected master and active slaves.
-exporter.discovery.master  | URL to a Mesos master.
-exporter.local-address     | URL to the local slave if not using discovery.
-exporter.interval          | Interval at which to fetch the Mesos slave metrics.
+Name                           | Description
+-------------------------------|------------
+web.listen-address             | Address to listen on for web interface and telemetry.
+web.telemetry-path             | Path under which to expose metrics.
+exporter.discovery             | Enable auto disovery of elected master and active slaves.
+exporter.discovery.master-url  | URL to a Mesos master.
+exporter.local-url             | URL to the local slave if not using discovery.
+exporter.interval              | Interval at which to fetch the Mesos slave metrics.
 
 
 The mesos_exporter uses the [glog](https://godoc.org/github.com/golang/glog) library for logging. With the default

@@ -24,8 +24,8 @@ const concurrentFetch = 100
 var (
 	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
 	autoDiscover   = flag.Bool("exporter.discovery", false, "Discover all Mesos slaves")
-	localAddr      = flag.String("exporter.local-address", "http://127.0.0.1:5051", "URL to the local Mesos slave")
-	masterURL      = flag.String("exporter.discovery.master", "http://mesos-master.example.com:5050", "Mesos master URL")
+	localURL       = flag.String("exporter.local-url", "http://127.0.0.1:5051", "URL to the local Mesos slave")
+	masterURL      = flag.String("exporter.discovery.master-url", "http://mesos-master.example.com:5050", "Mesos master URL")
 	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
 	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
 )
@@ -67,7 +67,7 @@ var httpClient = http.Client{
 type exporterOpts struct {
 	autoDiscover bool
 	interval     time.Duration
-	localAddr    string
+	localURL     string
 	masterURL    string
 }
 
@@ -94,7 +94,7 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 		),
 		opts: opts,
 	}
-	e.slaves.urls = []string{e.opts.localAddr}
+	e.slaves.urls = []string{e.opts.localURL}
 
 	if e.opts.autoDiscover {
 		glog.Info("auto discovery enabled from command line flag.")
@@ -337,7 +337,7 @@ func main() {
 	opts := &exporterOpts{
 		autoDiscover: *autoDiscover,
 		interval:     *scrapeInterval,
-		localAddr:    strings.TrimRight(*localAddr, "/"),
+		localURL:     strings.TrimRight(*localURL, "/"),
 		masterURL:    strings.TrimRight(*masterURL, "/"),
 	}
 	exporter := newMesosExporter(opts)
