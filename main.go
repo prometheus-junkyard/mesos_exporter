@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,8 +12,8 @@ import (
 	"time"
 
 	"github.com/antonlindstrom/mesos_stats"
-	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/log"
 )
 
 const concurrentFetch = 100
@@ -96,7 +95,7 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 	e.slaves.urls = []string{e.opts.localURL}
 
 	if e.opts.autoDiscover {
-		glog.Info("auto discovery enabled from command line flag.")
+		log.Info("auto discovery enabled from command line flag.")
 
 		// Update nr. of mesos slaves every 10 minutes
 		e.updateSlaves()
@@ -133,20 +132,20 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 	for u := range urlChan {
 		u, err := url.Parse(u)
 		if err != nil {
-			glog.Warning("could not parse slave URL: ", err)
+			log.Warn("could not parse slave URL: ", err)
 			continue
 		}
 
 		host, _, err := net.SplitHostPort(u.Host)
 		if err != nil {
-			glog.Warning("could not parse network address: ", err)
+			log.Warn("could not parse network address: ", err)
 			continue
 		}
 
 		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
 		resp, err := httpClient.Get(monitorURL)
 		if err != nil {
-			glog.Warning(err)
+			log.Warn(err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
@@ -154,7 +153,7 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 
 		var stats []mesos_stats.Monitor
 		if err = json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-			glog.Warning("failed to deserialize response: ", err)
+			log.Warn("failed to deserialize response: ", err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
@@ -218,7 +217,7 @@ func (e *periodicExporter) scrapeSlaves() {
 	e.slaves.Unlock()
 
 	urlCount := len(urls)
-	glog.V(6).Infof("active slaves: %d", urlCount)
+	log.Debugf("active slaves: %d", urlCount)
 
 	urlChan := make(chan string)
 	metricsChan := make(chan prometheus.Metric)
@@ -229,7 +228,7 @@ func (e *periodicExporter) scrapeSlaves() {
 		poolSize = urlCount
 	}
 
-	glog.V(6).Infof("creating fetch pool of size %d", poolSize)
+	log.Debugf("creating fetch pool of size %d", poolSize)
 
 	var wg sync.WaitGroup
 	wg.Add(poolSize)
@@ -247,7 +246,7 @@ func (e *periodicExporter) scrapeSlaves() {
 }
 
 func (e *periodicExporter) updateSlaves() {
-	glog.V(6).Info("discovering slaves...")
+	log.Debug("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
 	redirectURL := fmt.Sprintf("%s/master/redirect", e.opts.masterURL)
@@ -261,7 +260,7 @@ func (e *periodicExporter) updateSlaves() {
 	}
 	rresp, err := tr.RoundTrip(rReq)
 	if err != nil {
-		glog.Warning(err)
+		log.Warn(err)
 		return
 	}
 	defer rresp.Body.Close()
@@ -269,17 +268,17 @@ func (e *periodicExporter) updateSlaves() {
 	// This will/should return http://master.ip:5050
 	masterLoc := rresp.Header.Get("Location")
 	if masterLoc == "" {
-		glog.Warningf("%d response missing Location header", rresp.StatusCode)
+		log.Warnf("%d response missing Location header", rresp.StatusCode)
 		return
 	}
 
-	glog.V(6).Infof("current elected master at: %s", masterLoc)
+	log.Debugf("current elected master at: %s", masterLoc)
 
 	// Find all active slaves
 	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
 	resp, err := http.Get(stateURL)
 	if err != nil {
-		glog.Warning(err)
+		log.Warn(err)
 		return
 	}
 	defer resp.Body.Close()
@@ -295,7 +294,7 @@ func (e *periodicExporter) updateSlaves() {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&req); err != nil {
-		glog.Warningf("failed to deserialize request: %s", err)
+		log.Warnf("failed to deserialize request: %s", err)
 		return
 	}
 
@@ -313,7 +312,7 @@ func (e *periodicExporter) updateSlaves() {
 		}
 	}
 
-	glog.V(6).Infof("%d slaves discovered", len(slaveURLs))
+	log.Debugf("%d slaves discovered", len(slaveURLs))
 
 	e.slaves.Lock()
 	e.slaves.urls = slaveURLs
@@ -346,7 +345,7 @@ func main() {
 		http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
 	})
 
-	glog.Info("starting mesos_exporter on ", *addr)
+	log.Info("starting mesos_exporter on ", *addr)
 
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
