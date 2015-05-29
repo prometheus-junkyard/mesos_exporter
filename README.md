@@ -17,11 +17,8 @@ exporter.discovery             | Enable auto disovery of elected master and acti
 exporter.discovery.master-url  | URL to a Mesos master.
 exporter.local-url             | URL to the local slave if not using discovery.
 exporter.interval              | Interval at which to fetch the Mesos slave metrics.
+log.level                      | Only log messages with the given severity or above. Valid levels: debug, info, warn, error, fatal, panic.
 
-
-The mesos_exporter uses the [glog](https://godoc.org/github.com/golang/glog) library for logging. With the default
-parameters, nothing will be logged. Use `-logtostderr` to enable logging to
-stderr and `--help` to see more options about logging.
 
 ### Modes
 mesos_exporter can operate in two modes: discovery and local.
