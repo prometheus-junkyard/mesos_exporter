@@ -45,4 +45,10 @@ It's also possible to use in your own Dockerfile:
 
     FROM prom/mesos-exporter
 
+
+## Console Dashboard
+
+Copy the content of `consoles` to the consoles folder used by your Prometheus master. Your Mesos
+dashboard will then be available at `http://your-prometheus:9000/consoles/mesos.html`.
+
 ---
