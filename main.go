@@ -74,7 +74,7 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 		),
 		opts: opts,
 	}
-	e.nodes.nodes = []node{node{url: e.opts.localURL}}
+	e.nodes.nodes = []node{node{url: e.opts.localURL, Type: SlaveNode}}
 
 	if e.opts.autoDiscover {
 		log.Info("auto discovery enabled from command line flag.")
