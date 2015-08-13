@@ -191,50 +191,42 @@ func (e *periodicExporter) fetchSlaveMetricsSnapshot(url *url.URL, host string, 
 		e.errors.WithLabelValues(host).Inc()
 		return
 	}
-	labels := []string{"node", "type"}
-	labelValues := []string{host, "slave"}
-	e.gauge(metricsChan, labels, labelValues, "mesos_cpus_percent", stats.CpuPercentage, "CPU percentage")
-	e.gauge(metricsChan, labels, labelValues, "mesos_cpus_total", float64(stats.CpuTotal), "CPU total")
-	e.gauge(metricsChan, labels, labelValues, "mesos_cpus_used", stats.CpuUsed, "CPU used")
-	e.gauge(metricsChan, labels, labelValues, "mesos_disk_percent", stats.DiskPercentage, "Disk percentage")
-	e.gauge(metricsChan, labels, labelValues, "mesos_disk_total", float64(stats.DiskTotal), "Disk total")
-	e.gauge(metricsChan, labels, labelValues, "mesos_disk_used", float64(stats.DiskUsed), "Disk used")
+	labels := []string{"node"}
+	labelValues := []string{host}
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_cpus_available", float64(stats.CpuTotal), "Amount of CPUs available as resource")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_cpus_used", stats.CpuUsed, "Amount of CPU resources in use")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_cpus_used_percentage", stats.CpuPercentage, "Percentage of CPU resources in use")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_disk_available_bytes", float64(stats.DiskTotal), "Available bytes of disk space as resource")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_disk_used_bytes", float64(stats.DiskUsed), "Bytes of disk space resources in use")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_disk_used_percentage", float64(stats.DiskPercentage), "Percentage of disk space resources in use")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_mem_total_bytes", float64(stats.MemoryTotal), "Available bytes of memory available as resource")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_mem_used_bytes", float64(stats.MemoryUsed), "Bytes of memory resources in use")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_resource_mem_used_percentage", float64(stats.MemoryPercentage), "Percentage of memory resources in use")
 
-	e.gauge(metricsChan, labels, labelValues, "mesos_executors_registering", float64(stats.ExecutorsRegistering), "Executors registering")
-	e.gauge(metricsChan, labels, labelValues, "mesos_executors_running", float64(stats.ExecutorsRunning), "Executors running")
-	e.counter(metricsChan, labels, labelValues, "mesos_executors_terminated", float64(stats.ExecutorsTerminated), "Executors terminated")
-	e.gauge(metricsChan, labels, labelValues, "mesos_executors_terminating", float64(stats.ExecutorsTerminating), "Executors terminating")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_executors_registering", float64(stats.ExecutorsRegistering), "Amount of executors that are registering")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_executors_running", float64(stats.ExecutorsRunning), "Amount of executors that are running")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_executors_terminated_total", float64(stats.ExecutorsTerminated), "Total of terminated executors")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_executors_terminating", float64(stats.ExecutorsTerminating), "Amount of executors that are terminating")
 
-	e.gauge(metricsChan, labels, labelValues, "mesos_frameworks_active", float64(stats.FrameworksActive), "Frameworks active")
-	e.counter(metricsChan, labels, labelValues, "mesos_invalid_framework_messages", float64(stats.InvalidFrameworkMessages), "Invalid framework messages")
-	e.counter(metricsChan, labels, labelValues, "mesos_invalid_status_updates", float64(stats.InvalidStatusUpdates), "Invalid status updates")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_frameworks_active", float64(stats.FrameworksActive), "Amount of active frameworks")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_invalid_framework_messages_total", float64(stats.InvalidFrameworkMessages), "Total of invalid framework messages")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_invalid_status_updates_total", float64(stats.InvalidStatusUpdates), "Total of invalid status updates")
 
-	e.gauge(metricsChan, labels, labelValues, "mesos_mem_percent", stats.MemoryPercentage, "Memory percentage")
-	e.gauge(metricsChan, labels, labelValues, "mesos_mem_total", float64(stats.MemoryTotal), "Memory total")
-	e.gauge(metricsChan, labels, labelValues, "mesos_mem_used", float64(stats.MemoryUsed), "Memory used")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_recovery_errors_total", float64(stats.RecoveryErrors), "Amount of errors during slave recovery")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_registered", float64(stats.Registered), "Is slave registered with the master")
 
-	e.counter(metricsChan, labels, labelValues, "mesos_recovery_errors", float64(stats.RecoveryErrors), "Recovery errors")
-	e.gauge(metricsChan, labels, labelValues, "mesos_registered", float64(stats.Registered), "Registered")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_tasks_failed_total", float64(stats.TasksFailed), "Total of failed tasks")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_tasks_finished_total", float64(stats.TasksFinished), "Total of finished tasks")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_tasks_killed_total", float64(stats.TasksKilled), "Total of killed tasks")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_tasks_lost_total", float64(stats.TasksLost), "Total of lost tasks")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_tasks_running", float64(stats.TasksRunning), "Amount of running tasks")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_tasks_staging", float64(stats.TasksStaging), "Amount of staging tasks")
+	e.gauge(metricsChan, labels, labelValues, "mesos_slave_tasks_starting", float64(stats.TasksStarting), "Amount of starting tasks")
 
-	e.counter(metricsChan, labels, labelValues, "mesos_tasks_failed", float64(stats.TasksFailed), "Failed tasks")
-	e.counter(metricsChan, labels, labelValues, "mesos_tasks_finished", float64(stats.TasksFinished), "Finished tasks")
-	e.counter(metricsChan, labels, labelValues, "mesos_tasks_killed", float64(stats.TasksKilled), "Killed tasks")
-	e.counter(metricsChan, labels, labelValues, "mesos_tasks_lost", float64(stats.TasksLost), "Lost tasks")
-	e.gauge(metricsChan, labels, labelValues, "mesos_tasks_running", float64(stats.TasksRunning), "Running tasks")
-	e.gauge(metricsChan, labels, labelValues, "mesos_tasks_staging", float64(stats.TasksStaging), "Staging tasks")
-	e.gauge(metricsChan, labels, labelValues, "mesos_tasks_starting", float64(stats.TasksStarting), "Starting tasks")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_uptime_secs", stats.UptimeSecs, "Slave uptime in seconds")
 
-	e.counter(metricsChan, labels, labelValues, "mesos_uptime_secs", stats.UptimeSecs, "Uptime in seconds")
-
-	e.counter(metricsChan, labels, labelValues, "mesos_valid_framework_messages", float64(stats.ValidFrameworkMessages), "Valid framework messages")
-	e.counter(metricsChan, labels, labelValues, "mesos_valid_status_updates", float64(stats.ValidStatusUpdates), "Valid status updates")
-
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_cpus_total", float64(stats.SystemCpuTotal), "System CPU total")
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_load_15min", stats.SystemLoad15MinuteAvg, "System load 15 minutes average")
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_load_1min", stats.SystemLoad1MinuteAvg, "System load 1 minute average")
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_load_5min", stats.SystemLoad5MinuteAvg, "System load 5 minutes average")
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_mem_free_bytes", float64(stats.SystemMemoryFreeBytes), "System memory free in bytes")
-	e.gauge(metricsChan, labels, labelValues, "mesos_system_mem_total_bytes", float64(stats.SystemMemoryTotalBytes), "System memory total in bytes")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_valid_framework_messages_total", float64(stats.ValidFrameworkMessages), "Amount of valid framework messages")
+	e.counter(metricsChan, labels, labelValues, "mesos_slave_valid_status_updates_total", float64(stats.ValidStatusUpdates), "Amount of valid status updates")
 }
 
 func (e *periodicExporter) fetchMasterMetricsSnapshot(url *url.URL, host string, metricsChan chan <- prometheus.Metric) {
