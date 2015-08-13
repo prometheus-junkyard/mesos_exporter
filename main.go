@@ -263,7 +263,7 @@ func (e *periodicExporter) fetchMasterMetricsSnapshot(url *url.URL, host string,
 	e.gauge(metricsChan, labels, labelValues, "mesos_disk_used", float64(stats.DiskUsed), "Disk used")
 	e.counter(metricsChan, labels, labelValues, "mesos_dropped_messages", float64(stats.DroppedMessages), "Dropped messages")
 
-	e.gauge(metricsChan, labels, labelValues, "mesos_elected", stats.DiskPercentage, "Elected")
+	e.gauge(metricsChan, labels, labelValues, "mesos_elected", float64(stats.Elected), "Elected")
 
 	e.counter(metricsChan, labels, labelValues, "mesos_event_queue_dispatches", float64(stats.EventQueueDispatches), "Event queue dispatches")
 	e.counter(metricsChan, labels, labelValues, "mesos_event_queue_http_requests", float64(stats.EventQueueHttpRequests), "Event queue HTTP requests")
