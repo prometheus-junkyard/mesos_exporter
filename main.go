@@ -14,7 +14,7 @@ import (
 	"github.com/antonlindstrom/mesos_stats"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/log"
-	"github.com/pvdissel/mesos_metrics"
+	"github.com/bolcom/mesos_metrics"
 )
 
 const concurrentFetch = 100
