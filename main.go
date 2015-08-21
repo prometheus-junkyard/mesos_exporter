@@ -71,10 +71,11 @@ type exporterOpts struct {
 
 type periodicExporter struct {
 	sync.RWMutex
-	errors  *prometheus.CounterVec
-	metrics []prometheus.Metric
-	opts    *exporterOpts
-	slaves  struct {
+	errors    *prometheus.CounterVec
+	masterURL *url.URL
+	metrics   []prometheus.Metric
+	opts      *exporterOpts
+	slaves    struct {
 		sync.Mutex
 		urls []string
 	}
@@ -96,6 +97,16 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 
 	if e.opts.autoDiscover {
 		log.Info("auto discovery enabled from command line flag.")
+
+		parsedMasterURL, err := url.Parse(opts.masterURL)
+		if err != nil {
+			log.Fatalf("unable to parse master URL '%s': ", opts.masterURL, err)
+		}
+		if strings.HasPrefix(parsedMasterURL.Scheme, "http") == false {
+			log.Fatalf("invalid scheme '%s' in master url - use 'http' or 'https'", parsedMasterURL.Scheme)
+		}
+
+		e.masterURL = parsedMasterURL
 
 		// Update nr. of mesos slaves every 10 minutes
 		e.updateSlaves()
@@ -249,7 +260,7 @@ func (e *periodicExporter) updateSlaves() {
 	log.Debug("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
-	redirectURL := fmt.Sprintf("%s/master/redirect", e.opts.masterURL)
+	redirectURL := fmt.Sprintf("%s://%s/master/redirect", e.masterURL.Scheme, e.masterURL.Host)
 	rReq, err := http.NewRequest("GET", redirectURL, nil)
 	if err != nil {
 		panic(err)
@@ -274,8 +285,16 @@ func (e *periodicExporter) updateSlaves() {
 
 	log.Debugf("current elected master at: %s", masterLoc)
 
+	// Starting from 0.23.0, a Mesos Master does not set the scheme in the "Location" header.
+	// Use the scheme from the master URL in this case.
+	var stateURL string
+	if strings.HasPrefix(masterLoc, "http") {
+		stateURL = fmt.Sprintf("%s/master/state.json", masterLoc)
+	} else {
+		stateURL = fmt.Sprintf("%s:%s/master/state.json", e.masterURL.Scheme, masterLoc)
+	}
+
 	// Find all active slaves
-	stateURL := fmt.Sprintf("%s/master/state.json", masterLoc)
 	resp, err := http.Get(stateURL)
 	if err != nil {
 		log.Warn(err)
