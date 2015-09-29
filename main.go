@@ -20,16 +20,16 @@ const concurrentFetch = 100
 
 // Commandline flags.
 var (
-	addr           = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
-	autoDiscover   = flag.Bool("exporter.discovery", false, "Discover all Mesos slaves")
-	localURL       = flag.String("exporter.local-url", "http://127.0.0.1:5051", "URL to the local Mesos slave")
-	masterURL      = flag.String("exporter.discovery.master-url", "http://mesos-master.example.com:5050", "Mesos master URL")
-	metricsPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
-	scrapeInterval = flag.Duration("exporter.interval", (60 * time.Second), "Scrape interval duration")
+	addr                 = flag.String("web.listen-address", ":9105", "Address to listen on for web interface and telemetry")
+	autoDiscoverInterval = flag.Duration("exporter.discover-interval", 10*time.Minute, "Interval at which to update available slaves from a Mesos Master. Only used if exporter.scrape-mode=discover.")
+	queryURL             = flag.String("exporter.url", "", "The URL of a Mesos Slave, if mode=slave. The URL of a Mesos Master, if mode=discover or mode=master.")
+	metricsPath          = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
+	scrapeInterval       = flag.Duration("exporter.interval", 60*time.Second, "Scrape interval duration")
+	scrapeMode           = flag.String("exporter.scrape-mode", "", "The mode in which to run the exporter: 'discover', 'master' or 'slave'.")
 )
 
 var (
-	variableLabels = []string{"task", "slave", "framework_id"}
+	variableLabels = []string{"task", "slave", "framework_id", "framework_name", "task_name"}
 
 	cpuLimitDesc = prometheus.NewDesc(
 		"mesos_task_cpu_limit",
@@ -56,6 +56,137 @@ var (
 		"Task memory RSS usage in bytes.",
 		variableLabels, nil,
 	)
+
+	frameworkLabels = []string{"id", "name"}
+
+	frameworkResourcesUsedCPUs = prometheus.NewDesc(
+		"mesos_framework_resources_used_cpus",
+		"Fractional CPUs used by a framework.",
+		frameworkLabels, nil,
+	)
+
+	frameworkResourcesUsedDisk = prometheus.NewDesc(
+		"mesos_framework_resources_used_disk_bytes",
+		"Disk space used by a framework.",
+		frameworkLabels, nil,
+	)
+
+	frameworkResourcesUsedMemory = prometheus.NewDesc(
+		"mesos_framework_resources_used_memory_bytes",
+		"Memory used by a framework.",
+		frameworkLabels, nil,
+	)
+
+	masterMetricsLabels = []string{"host"}
+
+	masterMetrics = []snapshotMetric{
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_error_total",
+				"Number of tasks that have errored.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_error",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_failed_total",
+				"Number of tasks that have failed.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_failed",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_finished_total",
+				"Number of tasks that have finished.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_finished",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_killed_total",
+				"Number of tasks that got killed.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_killed",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_lost_total",
+				"Number of tasks that got lost.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_lost",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_running",
+				"Number of tasks that are running.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_running",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_staging",
+				"Number of tasks that are staging.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_staging",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_tasks_starting",
+				"Number of tasks that are starting.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/tasks_starting",
+			valueType:   prometheus.GaugeValue,
+		},
+	}
+
+	slaveMetricsLabels = []string{"host"}
+
+	slaveMetrics = []snapshotMetric{
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_slave_cpus",
+				"CPUs advertised by a Mesos Slave.",
+				slaveMetricsLabels, nil,
+			),
+			snapshotKey: "slave/cpus_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_slave_disk_bytes",
+				"Disk space advertised by a Mesos Slave.",
+				slaveMetricsLabels, nil,
+			),
+			snapshotKey: "slave/disk_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_slave_memory_bytes",
+				"Memory advertised by a Mesos Slave.",
+				slaveMetricsLabels, nil,
+			),
+			snapshotKey: "slave/mem_total",
+			valueType:   prometheus.GaugeValue,
+		},
+	}
 )
 
 var httpClient = http.Client{
@@ -63,22 +194,79 @@ var httpClient = http.Client{
 }
 
 type exporterOpts struct {
-	autoDiscover bool
-	interval     time.Duration
-	localURL     string
-	masterURL    string
+	autoDiscoverInterval time.Duration
+	interval             time.Duration
+	mode                 string
+	queryURL             string
 }
+
+type exporterTaskInfo struct {
+	FrameworkName string
+	TaskName      string
+}
+
+type framework struct {
+	ID            string
+	Name          string
+	UsedResources *resources `json:"used_resources"`
+}
+
+type masterState struct {
+	Frameworks []*framework
+	Hostname   string
+	Slaves     []*slave
+}
+
+type snapshotMetric struct {
+	convertFn   func(float64) float64
+	desc        *prometheus.Desc
+	snapshotKey string
+	valueType   prometheus.ValueType
+}
+
+type metricsSnapshot map[string]float64
 
 type periodicExporter struct {
 	sync.RWMutex
-	errors    *prometheus.CounterVec
-	masterURL *url.URL
-	metrics   []prometheus.Metric
-	opts      *exporterOpts
-	slaves    struct {
+	errors   *prometheus.CounterVec
+	metrics  []prometheus.Metric
+	opts     *exporterOpts
+	queryURL *url.URL
+	slaves   struct {
 		sync.Mutex
 		urls []string
 	}
+}
+
+type resources struct {
+	CPUs float64
+	Disk float64
+	Mem  float64
+}
+
+type slave struct {
+	Active   bool
+	Hostname string
+	PID      string
+}
+
+type slaveState struct {
+	Frameworks []*slaveStateFramework
+}
+
+type slaveStateExecutor struct {
+	Tasks []*slaveStateTask
+}
+
+type slaveStateFramework struct {
+	Name      string
+	Executors []*slaveStateExecutor
+}
+
+type slaveStateTask struct {
+	FrameworkID string `json:"framework_id"`
+	ID          string
+	Name        string
 }
 
 func newMesosExporter(opts *exporterOpts) *periodicExporter {
@@ -93,33 +281,44 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 		),
 		opts: opts,
 	}
-	e.slaves.urls = []string{e.opts.localURL}
 
-	if e.opts.autoDiscover {
-		log.Info("auto discovery enabled from command line flag.")
-
-		parsedMasterURL, err := url.Parse(opts.masterURL)
-		if err != nil {
-			log.Fatalf("unable to parse master URL '%s': ", opts.masterURL, err)
-		}
-		if strings.HasPrefix(parsedMasterURL.Scheme, "http") == false {
-			log.Fatalf("invalid scheme '%s' in master url - use 'http' or 'https'", parsedMasterURL.Scheme)
-		}
-
-		e.masterURL = parsedMasterURL
-
-		// Update nr. of mesos slaves every 10 minutes
-		e.updateSlaves()
-		go runEvery(e.updateSlaves, 10*time.Minute)
+	if opts.queryURL == "" {
+		log.Fatal("Flag '-exporter.url' not set")
 	}
 
-	// Fetch slave metrics every interval
-	go runEvery(e.scrapeSlaves, e.opts.interval)
+	switch opts.mode {
+	case "discover":
+		log.Info("starting mesos_exporter in scrape mode 'discover'")
+
+		e.queryURL = parseMasterURL(opts.queryURL)
+
+		// Update nr. of mesos slaves.
+		e.updateSlaves()
+		go runEvery(e.updateSlaves, e.opts.autoDiscoverInterval)
+
+		// Fetch slave metrics every interval.
+		go runEvery(e.scrapeSlaves, e.opts.interval)
+	case "master":
+		log.Info("starting mesos_exporter in scrape mode 'master'")
+		e.queryURL = parseMasterURL(opts.queryURL)
+	case "slave":
+		log.Info("starting mesos_exporter in scrape mode 'slave'")
+		e.slaves.urls = []string{opts.queryURL}
+	default:
+		log.Fatalf("Invalid value '%s' of flag '-exporter.mode' - must be one of 'discover', 'master' or 'slave'", opts.mode)
+	}
 
 	return e
 }
 
 func (e *periodicExporter) Describe(ch chan<- *prometheus.Desc) {
+	switch e.opts.mode {
+	case "master":
+		e.scrapeMaster()
+	case "slave":
+		e.scrapeSlaves()
+	}
+
 	e.rLockMetrics(func() {
 		for _, m := range e.metrics {
 			ch <- m.Desc()
@@ -129,6 +328,13 @@ func (e *periodicExporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (e *periodicExporter) Collect(ch chan<- prometheus.Metric) {
+	switch e.opts.mode {
+	case "master":
+		e.scrapeMaster()
+	case "slave":
+		e.scrapeSlaves()
+	}
+
 	e.rLockMetrics(func() {
 		for _, m := range e.metrics {
 			ch <- m
@@ -153,52 +359,95 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 			continue
 		}
 
-		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
-		resp, err := httpClient.Get(monitorURL)
+		taskInfo := map[string]exporterTaskInfo{}
+		var state slaveState
+		stateURL := fmt.Sprintf("%s/state.json", u)
+
+		err = getJSON(&state, stateURL)
 		if err != nil {
 			log.Warn(err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
-		defer resp.Body.Close()
 
+		for _, fw := range state.Frameworks {
+			for _, ex := range fw.Executors {
+				for _, t := range ex.Tasks {
+					taskInfo[t.ID] = exporterTaskInfo{fw.Name, t.Name}
+				}
+			}
+		}
+
+		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
 		var stats []mesos_stats.Monitor
-		if err = json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-			log.Warn("failed to deserialize response: ", err)
+
+		err = getJSON(&stats, monitorURL)
+		if err != nil {
+			log.Warn(err)
 			e.errors.WithLabelValues(host).Inc()
 			continue
 		}
 
 		for _, stat := range stats {
+			tinfo, ok := taskInfo[stat.Source]
+			if !ok {
+				continue
+			}
+
 			metricsChan <- prometheus.MustNewConstMetric(
 				cpuLimitDesc,
 				prometheus.GaugeValue,
 				float64(stat.Statistics.CpusLimit),
-				stat.Source, host, stat.FrameworkId,
+				stat.Source, host, stat.FrameworkId, tinfo.FrameworkName, tinfo.TaskName,
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				cpuSysDesc,
 				prometheus.CounterValue,
 				float64(stat.Statistics.CpusSystemTimeSecs),
-				stat.Source, host, stat.FrameworkId,
+				stat.Source, host, stat.FrameworkId, tinfo.FrameworkName, tinfo.TaskName,
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				cpuUsrDesc,
 				prometheus.CounterValue,
 				float64(stat.Statistics.CpusUserTimeSecs),
-				stat.Source, host, stat.FrameworkId,
+				stat.Source, host, stat.FrameworkId, tinfo.FrameworkName, tinfo.TaskName,
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				memLimitDesc,
 				prometheus.GaugeValue,
 				float64(stat.Statistics.MemLimitBytes),
-				stat.Source, host, stat.FrameworkId,
+				stat.Source, host, stat.FrameworkId, tinfo.FrameworkName, tinfo.TaskName,
 			)
 			metricsChan <- prometheus.MustNewConstMetric(
 				memRssDesc,
 				prometheus.GaugeValue,
 				float64(stat.Statistics.MemRssBytes),
-				stat.Source, host, stat.FrameworkId,
+				stat.Source, host, stat.FrameworkId, tinfo.FrameworkName, tinfo.TaskName,
+			)
+		}
+
+		metricsSnapshotURL := fmt.Sprintf("%s/metrics/snapshot", u)
+		var ms metricsSnapshot
+
+		err = getJSON(&ms, metricsSnapshotURL)
+		if err != nil {
+			log.Warn(err)
+			e.errors.WithLabelValues(host).Inc()
+			continue
+		}
+
+		for _, mm := range slaveMetrics {
+			metricValue, ok := ms[mm.snapshotKey]
+			if !ok {
+				continue
+			}
+
+			if mm.convertFn != nil {
+				metricValue = mm.convertFn(metricValue)
+			}
+
+			metricsChan <- prometheus.MustNewConstMetric(
+				mm.desc, mm.valueType, metricValue, host,
 			)
 		}
 	}
@@ -211,9 +460,75 @@ func (e *periodicExporter) rLockMetrics(f func()) {
 }
 
 func (e *periodicExporter) setMetrics(ch chan prometheus.Metric) {
-	metrics := make([]prometheus.Metric, 0)
+	metrics := []prometheus.Metric{}
 	for metric := range ch {
 		metrics = append(metrics, metric)
+	}
+
+	e.Lock()
+	e.metrics = metrics
+	e.Unlock()
+}
+
+func (e *periodicExporter) scrapeMaster() {
+	stateURL := fmt.Sprintf("%s://%s/master/state.json", e.queryURL.Scheme, e.queryURL.Host)
+
+	log.Debugf("Scraping master at %s", stateURL)
+
+	var state masterState
+
+	err := getJSON(&state, stateURL)
+	if err != nil {
+		log.Warn(err)
+		return
+	}
+
+	metrics := []prometheus.Metric{}
+
+	for _, fw := range state.Frameworks {
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			frameworkResourcesUsedCPUs,
+			prometheus.GaugeValue,
+			fw.UsedResources.CPUs,
+			fw.ID, fw.Name,
+		))
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			frameworkResourcesUsedDisk,
+			prometheus.GaugeValue,
+			megabytesToBytes(fw.UsedResources.Disk),
+			fw.ID, fw.Name,
+		))
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			frameworkResourcesUsedMemory,
+			prometheus.GaugeValue,
+			megabytesToBytes(fw.UsedResources.Mem),
+			fw.ID, fw.Name,
+		))
+	}
+
+	snapshotURL := fmt.Sprintf("%s://%s/metrics/snapshot", e.queryURL.Scheme, e.queryURL.Host)
+
+	var ms metricsSnapshot
+
+	err = getJSON(&ms, snapshotURL)
+	if err != nil {
+		log.Warn(err)
+		return
+	}
+
+	for _, mm := range masterMetrics {
+		metricValue, ok := ms[mm.snapshotKey]
+		if !ok {
+			continue
+		}
+
+		if mm.convertFn != nil {
+			metricValue = mm.convertFn(metricValue)
+		}
+
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			mm.desc, mm.valueType, metricValue, state.Hostname,
+		))
 	}
 
 	e.Lock()
@@ -260,7 +575,7 @@ func (e *periodicExporter) updateSlaves() {
 	log.Debug("discovering slaves...")
 
 	// This will redirect us to the elected mesos master
-	redirectURL := fmt.Sprintf("%s://%s/master/redirect", e.masterURL.Scheme, e.masterURL.Host)
+	redirectURL := fmt.Sprintf("%s://%s/master/redirect", e.queryURL.Scheme, e.queryURL.Host)
 	rReq, err := http.NewRequest("GET", redirectURL, nil)
 	if err != nil {
 		panic(err)
@@ -291,37 +606,23 @@ func (e *periodicExporter) updateSlaves() {
 	if strings.HasPrefix(masterLoc, "http") {
 		stateURL = fmt.Sprintf("%s/master/state.json", masterLoc)
 	} else {
-		stateURL = fmt.Sprintf("%s:%s/master/state.json", e.masterURL.Scheme, masterLoc)
+		stateURL = fmt.Sprintf("%s:%s/master/state.json", e.queryURL.Scheme, masterLoc)
 	}
 
+	var state masterState
+
 	// Find all active slaves
-	resp, err := http.Get(stateURL)
+	err = getJSON(&state, stateURL)
 	if err != nil {
 		log.Warn(err)
 		return
 	}
-	defer resp.Body.Close()
-
-	type slave struct {
-		Active   bool   `json:"active"`
-		Hostname string `json:"hostname"`
-		Pid      string `json:"pid"`
-	}
-
-	var req struct {
-		Slaves []*slave `json:"slaves"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&req); err != nil {
-		log.Warnf("failed to deserialize request: %s", err)
-		return
-	}
 
 	var slaveURLs []string
-	for _, slave := range req.Slaves {
+	for _, slave := range state.Slaves {
 		if slave.Active {
 			// Extract slave port from pid
-			_, port, err := net.SplitHostPort(slave.Pid)
+			_, port, err := net.SplitHostPort(slave.PID)
 			if err != nil {
 				port = "5051"
 			}
@@ -338,6 +639,34 @@ func (e *periodicExporter) updateSlaves() {
 	e.slaves.Unlock()
 }
 
+func getJSON(data interface{}, url string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func megabytesToBytes(v float64) float64 { return v * 1024 * 1024 }
+
+func parseMasterURL(masterURL string) *url.URL {
+	parsedMasterURL, err := url.Parse(masterURL)
+	if err != nil {
+		log.Fatalf("unable to parse master URL '%s': ", masterURL, err)
+	}
+	if strings.HasPrefix(parsedMasterURL.Scheme, "http") == false {
+		log.Fatalf("invalid scheme '%s' in master url - use 'http' or 'https'", parsedMasterURL.Scheme)
+	}
+
+	return parsedMasterURL
+}
+
 func runEvery(f func(), interval time.Duration) {
 	for _ = range time.NewTicker(interval).C {
 		f()
@@ -348,10 +677,10 @@ func main() {
 	flag.Parse()
 
 	opts := &exporterOpts{
-		autoDiscover: *autoDiscover,
-		interval:     *scrapeInterval,
-		localURL:     strings.TrimRight(*localURL, "/"),
-		masterURL:    strings.TrimRight(*masterURL, "/"),
+		autoDiscoverInterval: *autoDiscoverInterval,
+		interval:             *scrapeInterval,
+		mode:                 *scrapeMode,
+		queryURL:             strings.TrimRight(*queryURL, "/"),
 	}
 	exporter := newMesosExporter(opts)
 	prometheus.MustRegister(exporter)
