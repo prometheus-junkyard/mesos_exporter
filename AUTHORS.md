@@ -6,10 +6,10 @@ This Mesos Exporter was started by Anton Lindström.
 Maintainers of this repository:
 
 * Anton Lindström <lindztr@gmail.com>
-* Julius Volz <julius@soundcloud.com>
+* Julius Volz <julius.volz@gmail.com>
 
 The following individuals have contributed code to this repository
 (listed in alphabetical order):
 
 * Anton Lindström <lindztr@gmail.com>
-* Julius Volz <julius@soundcloud.com>
+* Julius Volz <julius.volz@gmail.com>
