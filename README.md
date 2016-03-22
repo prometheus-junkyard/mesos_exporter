@@ -1,6 +1,8 @@
 # Prometheus Mesos exporter
 
-This is an exporter for Prometheus to get Mesos data.
+This is an exporter for Prometheus to get Mesos data. 
+
+**This is deprecated, https://github.com/mesosphere/mesos_exporter is recommended instead.**
 
 ## Building and running
 
