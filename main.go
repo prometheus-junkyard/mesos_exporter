@@ -77,13 +77,669 @@ var (
 		frameworkLabels, nil,
 	)
 
+	frameworkActiveTasks = prometheus.NewDesc(
+		"mesos_framework_active_tasks",
+		"Active tasks launched by a framework.",
+		frameworkLabels, nil,
+	)
+
+	erroredTasksLabels = []string{"host", "source", "reason"}
+
+	masterTaskErrors = []masterTaskErrorMetric{
+		masterTaskErrorMetric{
+			prefix: "master/task_failed/",
+			desc: prometheus.NewDesc(
+				"mesos_master_task_failed_total",
+				"Number of tasks failed by reasons.",
+				erroredTasksLabels, nil,
+			),
+		},
+		masterTaskErrorMetric{
+			prefix: "master/task_killed/",
+			desc: prometheus.NewDesc(
+				"mesos_master_task_killed_total",
+				"Number of tasks killed by reasons.",
+				erroredTasksLabels, nil,
+			),
+		},
+		masterTaskErrorMetric{
+			prefix: "master/task_lost/",
+			desc: prometheus.NewDesc(
+				"mesos_master_task_lost_total",
+				"Number of tasks lost by reasons.",
+				erroredTasksLabels, nil,
+			),
+		},
+	}
+
 	masterMetricsLabels = []string{"host"}
 
+	// http://mesos.apache.org/documentation/latest/monitoring/
 	masterMetrics = []snapshotMetric{
 		snapshotMetric{
 			desc: prometheus.NewDesc(
+				"mesos_master_cpus_fraction",
+				"Fraction of allocated CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_cpus_revocable_fraction",
+				"Fraction of allocated revocable CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_revocable_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_cpus_revocable",
+				"Number of revocable CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_revocable_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_cpus_revocable_used",
+				"Number of allocated revocable CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_revocable_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_cpus",
+				"Number of CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_cpus_used",
+				"Number of allocated CPUs.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/cpus_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_fraction",
+				"Fraction of allocated disk space.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_revocable_fraction",
+				"Fraction of allocated revocable disk space.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_revocable_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_revocable_bytes",
+				"Revocable disk space in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_revocable_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_revocable_used_bytes",
+				"Allocated revocable disk space in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_revocable_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_bytes",
+				"Disk space in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_disk_used_bytes",
+				"Allocated disk space in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/disk_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_dropped_messages",
+				"Number of dropped messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/dropped_messages",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_elected",
+				"Whether this is the elected master.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/elected",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_event_queue_dispatches",
+				"Number of dispatches in the event queue.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/event_queue_dispatches",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_event_queue_http_requests",
+				"Number of HTTP requests in the event queue.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/event_queue_http_requests",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_event_queue_messages",
+				"Number of messages in the event queue.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/event_queue_messages",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_frameworks_active",
+				"Number of active frameworks.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/frameworks_active",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_frameworks_connected",
+				"Number of connected frameworks.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/frameworks_connected",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_frameworks_disconnected",
+				"Number of disconnected frameworks.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/frameworks_disconnected",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_frameworks_inactive",
+				"Number of inactive frameworks.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/frameworks_inactive",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_invalid_executor_to_framework_messages_total",
+				"Number of invalid executor to framework messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/invalid_executor_to_framework_messages",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_invalid_framework_to_executor_messages_total",
+				"Number of invalid framework to executor messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/invalid_framework_to_executor_messages",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_invalid_status_update_acknowledgements_total",
+				"Number of invalid status update acknowledgements.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/invalid_status_update_acknowledgements",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_invalid_status_updates",
+				"Number of invalid status updates.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/invalid_status_updates_total",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_fraction",
+				"Fraction of allocated memory.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_revocable_fraction",
+				"Fraction of allocated revocable memory.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_revocable_percent",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_revocable_bytes",
+				"Revocable memory in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_revocable_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_revocable_used_bytes",
+				"Allocated revocable memory in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_revocable_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_bytes",
+				"Memory in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_total",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			convertFn: megabytesToBytes,
+			desc: prometheus.NewDesc(
+				"mesos_master_mem_used_bytes",
+				"Allocated memory in bytes.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/mem_used",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_authenticate_total",
+				"Number of authentication messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_authenticate",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_deactivate_framework_total",
+				"Number of framework deactivation messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/deactivate_framework",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_decline_offers_total",
+				"Number of offers declined.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_decline_offers",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_executor_to_framework_total",
+				"Number of executor to framework messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/executor_to_framework",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_exited_executor_total",
+				"Number of terminated executor messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/exited_executor",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_framework_to_executor_total",
+				"Number of messages from a framework to an executor.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/framework_to_executor",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_kill_task_total",
+				"Number of kill task messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_kill_task",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_launch_tasks_total",
+				"Number of launch task messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_launch_tasks",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_reconcile_tasks_total",
+				"Number of reconcile task messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_reconcile_tasks",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_register_framework_total",
+				"Number of framework registration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_register_framework",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_register_slave_total",
+				"Number of slave registration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_register_slave",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_reregister_framework_total",
+				"Number of framework re-registration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_reregister_framework",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_reregister_slave_total",
+				"Number of slave re-registration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_reregister_slave",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_resource_request_total",
+				"Number of resource request messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_resource_request",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_revive_offers_total",
+				"Number of offer revival messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_revive_offers",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_status_update_total",
+				"Number of status update messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_status_update",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_status_update_acknowledgement_total",
+				"Number of status update acknowledgement messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_status_update_acknowledgement",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_suppress_offers_total",
+				"Number of suppress offer messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_suppress_offers",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_unregister_framework_total",
+				"Number of framework unregistration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_unregister_framework",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_unregister_slave_total",
+				"Number of slave unregistration messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_unregister_slave",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_messages_update_slave_total",
+				"Number of update slave messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/messages_update_slave",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_mater_outstanding_offers",
+				"Number of outstanding resource offers.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/outstanding_offers",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_mater_outstanding_offers",
+				"Number of outstanding resource offers.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/outstanding_offers",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_recovery_slave_removals_total",
+				"Number of slaves not re-registered during master failover.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/recovery_slave_removals",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_registrations_total",
+				"Number of slaves that were able to cleanly re-join the cluster and connect back to the master after the master is disconnected.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_registrations",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_removals_total",
+				"Number of slave removed for various reasons, including maintenance.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_removals",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_removals_reason_registered_total",
+				"Number of slaves removed when new slaves registered at the same address.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_removals/reason_registered",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_removals_reason_unhealthy_total",
+				"Number of slaves failed due to failed health checks.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_removals/reason_unhealthy",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_removals_reason_unregistered_total",
+				"Number of slaves unregistered.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_removals/reason_unregistered",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_reregistrations_total",
+				"Number of slave re-registrations.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_reregistrations",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_shutdowns_canceled_total",
+				"Number of cancelled slave shutdowns. This happens when the slave removal rate limit allows for a slave to reconnect and send a PONG to the master before being removed.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_shutdowns_canceled",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_shutdowns_completed_total",
+				"Number of slaves that failed their health check. These are slaves which were not heard from despite the slave-removal rate limit, and have been removed from the master's slave registry.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_shutdowns_completed",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slave_shutdowns_scheduled_total",
+				"Number of slaves which have failed their health check and are scheduled to be removed. They will not be immediately removed due to the Slave Removal Rate-Limit, but master/slave_shutdowns_completed will start increasing as they do get removed.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slave_shutdowns_scheduled",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slaves_active",
+				"Number of active slaves.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slaves_active",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slaves_connected",
+				"Number of connected slaves.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slaves_connected",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slaves_disconnected",
+				"Number of disconnected slaves.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slaves_disconnected",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_slaves_inactive",
+				"Number of inactive slaves.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/slaves_inactive",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
 				"mesos_master_tasks_error_total",
-				"Number of tasks that have errored.",
+				"Number of tasks that were invalid.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_error",
@@ -92,7 +748,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_failed_total",
-				"Number of tasks that have failed.",
+				"Number of failed tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_failed",
@@ -101,7 +757,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_finished_total",
-				"Number of tasks that have finished.",
+				"Number of finished tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_finished",
@@ -110,7 +766,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_killed_total",
-				"Number of tasks that got killed.",
+				"Number of killed tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_killed",
@@ -119,7 +775,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_lost_total",
-				"Number of tasks that got lost.",
+				"Number of lost tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_lost",
@@ -128,7 +784,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_running",
-				"Number of tasks that are running.",
+				"Number of running tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_running",
@@ -137,7 +793,7 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_staging",
-				"Number of tasks that are staging.",
+				"Number of staging tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_staging",
@@ -146,11 +802,56 @@ var (
 		snapshotMetric{
 			desc: prometheus.NewDesc(
 				"mesos_master_tasks_starting",
-				"Number of tasks that are starting.",
+				"Number of starting tasks.",
 				masterMetricsLabels, nil,
 			),
 			snapshotKey: "master/tasks_starting",
 			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_uptime_secsonds",
+				"Uptime in seconds.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/uptime_secs",
+			valueType:   prometheus.GaugeValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_valid_executor_to_framework_messages_total",
+				"Number of invalid executor to framework messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/valid_executor_to_framework_messages",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_valid_framework_to_executor_messages_total",
+				"Number of invalid framework to executor messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/valid_framework_to_executor_messages",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_valid_status_update_acknowledgements_total",
+				"Number of invalid status update acknowledgements.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/valid_status_update_acknowledgements",
+			valueType:   prometheus.CounterValue,
+		},
+		snapshotMetric{
+			desc: prometheus.NewDesc(
+				"mesos_master_valid_status_updates_total",
+				"Number of valid status update messages.",
+				masterMetricsLabels, nil,
+			),
+			snapshotKey: "master/valid_status_updates",
+			valueType:   prometheus.CounterValue,
 		},
 	}
 
@@ -209,6 +910,7 @@ type framework struct {
 	ID            string
 	Name          string
 	UsedResources *resources `json:"used_resources"`
+	Tasks         []interface{}
 }
 
 type masterState struct {
@@ -222,6 +924,11 @@ type snapshotMetric struct {
 	desc        *prometheus.Desc
 	snapshotKey string
 	valueType   prometheus.ValueType
+}
+
+type masterTaskErrorMetric struct {
+	prefix string
+	desc   *prometheus.Desc
 }
 
 type metricsSnapshot map[string]float64
@@ -504,6 +1211,12 @@ func (e *periodicExporter) scrapeMaster() {
 			megabytesToBytes(fw.UsedResources.Mem),
 			fw.ID, fw.Name,
 		))
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			frameworkActiveTasks,
+			prometheus.GaugeValue,
+			float64(len(fw.Tasks)),
+			fw.ID, fw.Name,
+		))
 	}
 
 	snapshotURL := fmt.Sprintf("%s://%s/metrics/snapshot", e.queryURL.Scheme, e.queryURL.Host)
@@ -529,6 +1242,26 @@ func (e *periodicExporter) scrapeMaster() {
 		metrics = append(metrics, prometheus.MustNewConstMetric(
 			mm.desc, mm.valueType, metricValue, state.Hostname,
 		))
+	}
+
+	for k, v := range ms {
+		for _, mm := range masterTaskErrors {
+			if !strings.HasPrefix(k, mm.prefix) {
+				continue
+			}
+
+			p := strings.SplitN(strings.TrimPrefix(k, mm.prefix), "/", 2)
+			if len(p) != 2 {
+				continue
+			}
+
+			metrics = append(metrics, prometheus.MustNewConstMetric(
+				mm.desc,
+				prometheus.CounterValue,
+				v,
+				state.Hostname, p[0], p[1],
+			))
+		}
 	}
 
 	e.Lock()
