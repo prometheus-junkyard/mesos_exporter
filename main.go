@@ -361,7 +361,7 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 
 		taskInfo := map[string]exporterTaskInfo{}
 		var state slaveState
-		stateURL := fmt.Sprintf("%s/state.json", u)
+		stateURL := fmt.Sprintf("%s/state", u)
 
 		err = getJSON(&state, stateURL)
 		if err != nil {
@@ -378,7 +378,7 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 			}
 		}
 
-		monitorURL := fmt.Sprintf("%s/monitor/statistics.json", u)
+		monitorURL := fmt.Sprintf("%s/monitor/statistics", u)
 		var stats []mesos_stats.Monitor
 
 		err = getJSON(&stats, monitorURL)
@@ -471,7 +471,7 @@ func (e *periodicExporter) setMetrics(ch chan prometheus.Metric) {
 }
 
 func (e *periodicExporter) scrapeMaster() {
-	stateURL := fmt.Sprintf("%s://%s/master/state.json", e.queryURL.Scheme, e.queryURL.Host)
+	stateURL := fmt.Sprintf("%s://%s/master/state", e.queryURL.Scheme, e.queryURL.Host)
 
 	log.Debugf("Scraping master at %s", stateURL)
 
@@ -604,9 +604,9 @@ func (e *periodicExporter) updateSlaves() {
 	// Use the scheme from the master URL in this case.
 	var stateURL string
 	if strings.HasPrefix(masterLoc, "http") {
-		stateURL = fmt.Sprintf("%s/master/state.json", masterLoc)
+		stateURL = fmt.Sprintf("%s/master/state", masterLoc)
 	} else {
-		stateURL = fmt.Sprintf("%s:%s/master/state.json", e.queryURL.Scheme, masterLoc)
+		stateURL = fmt.Sprintf("%s:%s/master/state", e.queryURL.Scheme, masterLoc)
 	}
 
 	var state masterState
