@@ -30,7 +30,7 @@ var (
 
 var (
 	variableLabels = []string{"task", "slave", "framework_id", "framework_name", "task_name"}
-
+	variableMesosUpLabels = []string{"host"}
 	cpuLimitDesc = prometheus.NewDesc(
 		"mesos_task_cpu_limit",
 		"Fractional CPU limit.",
@@ -56,7 +56,12 @@ var (
 		"Task memory RSS usage in bytes.",
 		variableLabels, nil,
 	)
-
+	
+	MesosUp = prometheus.NewDesc(
+		"mesos_up",
+		"Mesos state",
+		variableMesosUpLabels, nil,
+	)
 	frameworkLabels = []string{"id", "name"}
 
 	frameworkResourcesUsedCPUs = prometheus.NewDesc(
@@ -290,7 +295,7 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 	case "discover":
 		log.Info("starting mesos_exporter in scrape mode 'discover'")
 
-		e.queryURL = parseMasterURL(opts.queryURL)
+		e.queryURL = parseMasterURL(opts.queryURL, e)
 
 		// Update nr. of mesos slaves.
 		e.updateSlaves()
@@ -300,9 +305,21 @@ func newMesosExporter(opts *exporterOpts) *periodicExporter {
 		go runEvery(e.scrapeSlaves, e.opts.interval)
 	case "master":
 		log.Info("starting mesos_exporter in scrape mode 'master'")
-		e.queryURL = parseMasterURL(opts.queryURL)
+		e.queryURL = parseMasterURL(opts.queryURL, e)
 	case "slave":
 		log.Info("starting mesos_exporter in scrape mode 'slave'")
+		up := float64(1)
+		response, err := http.Get(opts.queryURL)
+		if err != nil {
+        	up = 0
+    	}
+		if response != nil {}    
+		e.metrics = append(e.metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			up, 
+			"slave",
+		))
 		e.slaves.urls = []string{opts.queryURL}
 	default:
 		log.Fatalf("Invalid value '%s' of flag '-exporter.mode' - must be one of 'discover', 'master' or 'slave'", opts.mode)
@@ -393,7 +410,6 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 			if !ok {
 				continue
 			}
-
 			metricsChan <- prometheus.MustNewConstMetric(
 				cpuLimitDesc,
 				prometheus.GaugeValue,
@@ -478,12 +494,25 @@ func (e *periodicExporter) scrapeMaster() {
 	var state masterState
 
 	err := getJSON(&state, stateURL)
+	metrics := []prometheus.Metric{}
 	if err != nil {
 		log.Warn(err)
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			0, 
+			"time",
+		))
 		return
 	}
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			1, 
+			"time",
+		))
 
-	metrics := []prometheus.Metric{}
+
 
 	for _, fw := range state.Frameworks {
 		metrics = append(metrics, prometheus.MustNewConstMetric(
@@ -512,10 +541,22 @@ func (e *periodicExporter) scrapeMaster() {
 
 	err = getJSON(&ms, snapshotURL)
 	if err != nil {
+		metrics = append(metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			0, 
+			"time",
+		))
 		log.Warn(err)
 		return
 	}
-
+	metrics = append(metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			0, 
+			"time",
+		))
+	
 	for _, mm := range masterMetrics {
 		metricValue, ok := ms[mm.snapshotKey]
 		if !ok {
@@ -655,15 +696,29 @@ func getJSON(data interface{}, url string) error {
 
 func megabytesToBytes(v float64) float64 { return v * 1024 * 1024 }
 
-func parseMasterURL(masterURL string) *url.URL {
+func parseMasterURL(masterURL string, e *periodicExporter) *url.URL {
+	
+	up := float64(1)
+	response, err := http.Get(masterURL)
+    if err != nil {
+        up = 0
+    }
+	if response != nil {}    
 	parsedMasterURL, err := url.Parse(masterURL)
 	if err != nil {
 		log.Fatalf("unable to parse master URL '%s': ", masterURL, err)
+		up = 0
 	}
 	if strings.HasPrefix(parsedMasterURL.Scheme, "http") == false {
 		log.Fatalf("invalid scheme '%s' in master url - use 'http' or 'https'", parsedMasterURL.Scheme)
+		up = 0
 	}
-
+	e.metrics = append(e.metrics, prometheus.MustNewConstMetric(
+			MesosUp,
+			prometheus.GaugeValue,
+			up, 
+			"master",
+	))
 	return parsedMasterURL
 }
 
