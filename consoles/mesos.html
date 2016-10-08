@@ -1,0 +1,61 @@
+{{ template "head" . }}
+
+{{ template "prom_right_table_head" }}
+<tr>
+    <th colspan="2">Statistics</th>
+</tr>
+<tr>
+  <td>Mesos Jobs (active)</td>
+  <td>{{ template "prom_query_drilldown" (args "count(mesos_task_cpu_limit{job='mesos'})") }}</td>
+</tr>
+<tr>
+  <td>Memory (used / allocated)</td>
+  <td>
+    {{ template "prom_query_drilldown" (args "sum(mesos_task_memory_rss_bytes{job='mesos'})" "B" "humanize1024") }} /
+    {{ template "prom_query_drilldown" (args "sum(mesos_task_memory_limit_bytes{job='mesos'})" "B" "humanize1024") }}
+  </td>
+</tr>
+<tr>
+  <td>CPU Cores (used / allocated)</td>
+  <td>
+    {{ template "prom_query_drilldown" (args "sum(rate(mesos_task_cpu_user_seconds_total[5m])) + sum(rate(mesos_task_cpu_system_seconds_total[5m]))" "" "humanizeNoSmallPrefix" ) }} /
+    {{ template "prom_query_drilldown" (args "sum(mesos_task_cpu_limit)" "" "humanizeNoSmallPrefix") }}
+  </td>
+</tr>
+{{ template "prom_right_table_tail" }}
+
+{{ template "prom_content_head" . }}
+<h1>Apache Mesos</h1>
+  <h3>RAM Usage</h3>
+  <div id="ram"></div>
+  <script>
+  new PromConsole.Graph({
+    node: document.querySelector("#ram"),
+    expr: "sum(mesos_task_memory_rss_bytes{job='mesos'}) by (slave)",
+    min: 0,
+    renderer: "line",
+    yAxisFormatter: PromConsole.NumberFormatter.humanizeNoSmallPrefix,
+    yHoverFormatter: PromConsole.NumberFormatter.humanizeNoSmallPrefix,
+    yTitle: 'RAM',
+    yUnits: 'B'
+  })
+  </script>
+
+  <h3>CPU Usage</h3>
+  <div id="cpu"></div>
+  <script>
+  new PromConsole.Graph({
+    node: document.querySelector("#cpu"),
+    expr: "sum(rate(mesos_task_cpu_user_seconds_total[2m])) by (slave) + sum(rate(mesos_task_cpu_system_seconds_total[2m])) by (slave)",
+    min: 0,
+    renderer: "line",
+    yAxisFormatter: PromConsole.NumberFormatter.humanizeNoSmallPrefix,
+    yHoverFormatter: PromConsole.NumberFormatter.humanizeNoSmallPrefix,
+    yTitle: 'CPU',
+  })
+  </script>
+
+
+{{ template "prom_content_tail" . }}
+
+{{ template "tail" }}
