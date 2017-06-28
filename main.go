@@ -324,7 +324,7 @@ func (e *periodicExporter) Describe(ch chan<- *prometheus.Desc) {
 			ch <- m.Desc()
 		}
 	})
-	e.errors.MetricVec.Describe(ch)
+	e.errors.Describe(ch)
 }
 
 func (e *periodicExporter) Collect(ch chan<- prometheus.Metric) {
@@ -340,7 +340,7 @@ func (e *periodicExporter) Collect(ch chan<- prometheus.Metric) {
 			ch <- m
 		}
 	})
-	e.errors.MetricVec.Collect(ch)
+	e.errors.Collect(ch)
 }
 
 func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prometheus.Metric, wg *sync.WaitGroup) {
