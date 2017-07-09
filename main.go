@@ -255,6 +255,7 @@ type slaveState struct {
 }
 
 type slaveStateExecutor struct {
+	Source string
 	Tasks []*slaveStateTask
 }
 
@@ -373,7 +374,7 @@ func (e *periodicExporter) fetch(urlChan <-chan string, metricsChan chan<- prome
 		for _, fw := range state.Frameworks {
 			for _, ex := range fw.Executors {
 				for _, t := range ex.Tasks {
-					taskInfo[t.ID] = exporterTaskInfo{fw.Name, t.Name}
+					taskInfo[ex.Source] = exporterTaskInfo{fw.Name, t.Name}
 				}
 			}
 		}
